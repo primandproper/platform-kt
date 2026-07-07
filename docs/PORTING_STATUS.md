@@ -4,16 +4,19 @@ _Generated 2026-07-06. Compares the Kotlin port against its Go source at `../pla
 
 ## Where we stand
 
-**8 of 40 packages ported, across 14 Gradle modules** — `observability` (the original) plus all of
-**Tier 1** (foundation & networking spine): `errors`, `identifiers`, `random`, `retry`,
-`circuitbreaking`, and `httpclient`.
+**13 of 40 packages ported, across 28 Gradle modules** — `observability` (the original), all of
+**Tier 1** (foundation & networking spine: `errors`, `identifiers`, `random`, `retry`,
+`circuitbreaking`, `httpclient`), and all of **Tier 2** (`cache`, `cryptography`, `secrets`,
+`featureflags`, `analytics`).
 
-> ⚠️ **Tier 1 is written but not yet compiled or tested.** This machine has no JVM/Android
-> toolchain, so the ~4,500 LOC (71 `.kt` files, including tests) was hand-written against the Go
-> source and the observability port's conventions — nothing was built or run. Verify on an equipped
-> machine with `make setup` then `./gradlew build test ktlintCheck`. The pure-JVM modules
-> (`:errors`, `:retry`, `:circuitbreaking`, `:httpclient-api`) need no emulator and are the fastest
-> first signal.
+> ✅ **Everything now compiles, tests, and lints green.** As of 2026-07-06 the machine has a
+> toolchain (tracked `mise.toml`: JDK 17 + Gradle 8.11 + Android SDK), so the previously
+> hand-written-blind code has been built for real. Run it yourself with
+> `mise exec -- ./gradlew clean build`. First-build friction that was fixed to reach green:
+> an `observability-api` `CoroutineContext` return-type mismatch, two coroutine-test API slips in
+> `retry`, coroutine stacktrace-recovery breaking exception-identity assertions (disabled tree-wide
+> under test), and ktlint naming (`.editorconfig` allows the type-named factory-function idiom).
+> The `com.android.library` modules build here too (compileSdk/minSdk from the catalog).
 
 Landed with Tier 1 (see the [Tier 1 table](#tier-1--foundation--networking-spine--done) for detail):
 
@@ -86,15 +89,26 @@ JVM/Android-equipped machine.**
 | ✅ | **retry** | 185 | 🌐 | `:retry` | Coroutine-native `Policy.execute` (`suspend`/`delay`) + `Flow.retryWhen` variant; equal-jitter math ported bit-for-bit; cancellation-aware. |
 | ✅ | **circuitbreaking** | 736 | 🌐 | `:circuitbreaking` | `CircuitState` `StateFlow` breaker + `partitioned` per-key registry; `noop`/recording doubles; metrics descoped (`TODO(metrics)` seam). |
 
-### Tier 2 — Core cross-surface services (high value, both server & Android)
+### Tier 2 — Core cross-surface services ✅ DONE
 
-| Pkg | LOC | Target | What it does | KT mapping |
-|---|--:|:--:|---|---|
-| **cache** | 1744 | 🌐 | Generic cache (Redis + in-mem) | Interface + in-mem both surfaces; Redis backend on server, disk (DataStore) on Android. |
-| **cryptography** | 680 | 🌐 | Encrypt/decrypt + hashing | `javax.crypto`/Tink server-side; Jetpack Security + Keystore on Android. |
-| **secrets** | 760 | 🌐 | Secret retrieval | Keep interface; env/GCP-SM/AWS-SSM backends on server, EncryptedSharedPreferences/Keystore on Android. |
-| **featureflags** | 1169 | 🌐 | Flag eval (LaunchDarkly, PostHog) | Both vendors ship server + Android SDKs — wrap behind the platform interface + noop/local backend. |
-| **analytics** | 1172 | 🌐 | Event tracking | Segment/PostHog/Amplitude server + Android SDKs behind one interface. |
+All five ported (2026-07-06) as **core + one primary backend + a real Android module**, per the Go
+source's anatomy (interface + config + `noop` + `mock` + in-memory/local). Each package's remaining
+vendor backends are documented `TODO(<vendor>)` seams, not silent drops. **234 tests, all green.**
+
+| ✅ | Pkg | LOC | Target | Module(s) | Primary backend · Android · seams |
+|:--:|---|--:|:--:|---|---|
+| ✅ | **cache** | 1744 | 🌐 | `:cache-api` + `:cache-redis` + `:cache-android` | In-mem + Redis (Lettuce, async→coroutine; CRC16 cluster slots) · DataStore + TTL envelope · `TODO`: circuitbreaking wrap, metrics, cluster client. |
+| ✅ | **cryptography** | 680 | 🌐 | `:cryptography-api` + `:cryptography-jvm` + `:cryptography-android` | AES-256-GCM (`javax.crypto`) + hashers (sha256/512, adler32, hand-rolled CRC-64/FNV KAT-matched to Go) · AndroidKeyStore AES-GCM · `TODO`: salsa20. |
+| ✅ | **secrets** | 760 | 🌐 | `:secrets-api` + `:secrets-android` | `env` (value never touches a span/log) · EncryptedSharedPreferences + Keystore (minSdk 23) · `TODO`: gcp, ssm, kubectl. |
+| ✅ | **featureflags** | 1169 | 🌐 | `:featureflags-api` + `:featureflags-launchdarkly` + `:featureflags-android` | LaunchDarkly server SDK (offline TestData-tested) · DataStore local store · `TODO`: posthog, LD-android, circuitbreaking wrap. |
+| ✅ | **analytics** | 1172 | 🌐 | `:analytics-api` + `:analytics-segment` + `:analytics-android` | Segment Java SDK (behind an execute-shaped CircuitBreaker) + `multisource` composite · on-device buffering reporter · `TODO`: posthog, segment-android. |
+
+> **Follow-ups from the parallel port:** `cache-redis` and `featureflags-launchdarkly` should
+> reattach the `:circuitbreaking` wrap that platform-go has (dropped only because those port
+> worktrees branched before `:circuitbreaking` was committed; `:analytics-segment`, ported from the
+> green baseline, already wires it). Android modules for `featureflags`/`analytics` use the sanctioned
+> local fallback because the LaunchDarkly/Segment client SDKs need a live `Context` — wiring those is
+> the remaining Android work.
 
 ### Tier 3 — Server platform: the Kotlin server counterpart (backend swap)
 
@@ -164,10 +178,11 @@ pass to turn "written" into "verified" (see the ⚠️ note under "Where we stan
 
 ## Things to fix regardless of sequence
 
-1. **Compile & test the Tier 1 modules.** They're hand-written and unbuilt — the single highest-value
-   next action. `make setup` then `./gradlew build test ktlintCheck`; expect first-compile friction
-   (an import, a catalog version, a `desugar` gap) and iterate.
-2. **Backfill observability tests** (`LogcatLogger`, config validation, umbrella builder) — cheapest
+1. ~~**Compile & test the Tier 1 modules.**~~ — ✅ done. The whole tree (Tier 1 + Tier 2) builds,
+   tests, and lints green via `mise exec -- ./gradlew clean build`.
+2. **Reattach `:circuitbreaking`** in `cache-redis` and `featureflags-launchdarkly` (see the Tier 2
+   follow-up note) — the only unintended fidelity gaps from the parallel port.
+3. **Backfill observability tests** (`LogcatLogger`, config validation, umbrella builder) — cheapest
    confidence you can buy in the one thing already shipped.
 3. ~~**Carry header redaction into `httpclient`**~~ — ✅ done; `:httpclient-api` redacts sensitive
    headers before span attachment.
