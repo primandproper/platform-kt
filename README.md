@@ -103,18 +103,22 @@ redacted in `:httpclient-api` **before** any request/response data reaches a spa
 ## Building
 
 Requires **JDK 17** and the **Android SDK** (`local.properties` with `sdk.dir`, or
-`ANDROID_HOME`). Easiest path is to open the project in Android Studio. From the CLI, bootstrap the
-wrapper once with a local Gradle **8.11+** (needed by AGP 8.7), then use the `Makefile`:
+`ANDROID_HOME`). Easiest path is to open the project in Android Studio. The Gradle wrapper is
+committed, so `./gradlew` works out of the box — from the CLI just use the `Makefile`:
 
 ```bash
-make setup     # gradle wrapper --gradle-version 8.11 (one-time)
 make build     # compile + assemble
 make fmt       # ktlintFormat
 make lint      # ktlintCheck
 make test      # JVM unit tests
+make check     # lint + format + tests — same command CI runs
 ```
 
 Run `make help` for the full target list.
+
+Every PR is gated by [`.github/workflows/ci.yml`](.github/workflows/ci.yml), which runs `make check`
+(ktlint + unit tests + Android Lint). It invokes the same target you run locally, so a green
+`make check` on your machine predicts a green CI run.
 
 ### Verification
 

@@ -26,7 +26,8 @@ help:
 
 ## PREREQUISITES
 
-# The wrapper jar isn't committed; bootstrap it once with a system Gradle (or open in Android Studio).
+# The wrapper jar is committed, so `./gradlew` works out of the box — you don't normally need this.
+# `make setup` only regenerates the wrapper (e.g. to bump its Gradle version); needs a system Gradle.
 .PHONY: setup
 setup:
 	gradle wrapper --gradle-version $(GRADLE_VERSION)
