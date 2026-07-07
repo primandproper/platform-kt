@@ -35,4 +35,10 @@ include(
     // Tier 2 — core cross-surface services
     ":secrets-api",
     ":secrets-android",
+    ":analytics-api",
+    ":analytics-segment",
+    ":analytics-android",
+    ":featureflags-api",
+    ":featureflags-launchdarkly",
+    ":featureflags-android",
 )
