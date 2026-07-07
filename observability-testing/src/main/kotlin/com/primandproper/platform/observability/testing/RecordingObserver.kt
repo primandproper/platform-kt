@@ -48,8 +48,7 @@ public class RecordingObserver : Observer {
     internal fun nextSeq(): Int = seq.getAndIncrement()
 
     /** All observations across all operations, globally ordered by sequence. */
-    public fun stream(): List<Observation> =
-        operations.flatMap { it.observations }.sortedBy { it.seq }
+    public fun stream(): List<Observation> = operations.flatMap { it.observations }.sortedBy { it.seq }
 
     /** Asserts the matchers occur, in order, somewhere in the global stream. */
     public fun assertObservedInOrder(vararg matchers: Matcher) {
@@ -59,11 +58,12 @@ public class RecordingObserver : Observer {
     /** Finds the (ended) operation that observed all of [pairs], or fails. */
     public fun assertObservedOperationWithValues(vararg pairs: Pair<String, Any?>) {
         val wanted = pairs.toMap()
-        val match = operations.firstOrNull { op ->
-            wanted.all { (k, v) -> op.values[k] == v }
-        } ?: throw AssertionError(
-            "no operation observed all of $wanted; saw ${operations.map { it.values }}",
-        )
+        val match =
+            operations.firstOrNull { op ->
+                wanted.all { (k, v) -> op.values[k] == v }
+            } ?: throw AssertionError(
+                "no operation observed all of $wanted; saw ${operations.map { it.values }}",
+            )
         if (!match.ended) throw AssertionError("operation \"${match.name}\" matched but was never ended")
     }
 }
@@ -77,9 +77,9 @@ public class RecordingOperation internal constructor(
     public val name: String,
 ) : Operation {
     public val observations: MutableList<Observation> = mutableListOf()
-    public val values: MutableMap<String, Any?> = mutableMapOf()      // Set (BOTH)
-    public val spanValues: MutableMap<String, Any?> = mutableMapOf()  // Set + SpanOnly
-    public val logValues: MutableMap<String, Any?> = mutableMapOf()   // Set + LogOnly
+    public val values: MutableMap<String, Any?> = mutableMapOf() // Set (BOTH)
+    public val spanValues: MutableMap<String, Any?> = mutableMapOf() // Set + SpanOnly
+    public val logValues: MutableMap<String, Any?> = mutableMapOf() // Set + LogOnly
     public val errors: MutableList<Throwable> = mutableListOf()
     public var ended: Boolean = false
         private set
@@ -87,7 +87,10 @@ public class RecordingOperation internal constructor(
     override val logger: Logger = NoopLogger
     override val span: Span = io.opentelemetry.api.trace.Span.getInvalid()
 
-    override fun set(key: String, value: Any?): Operation {
+    override fun set(
+        key: String,
+        value: Any?,
+    ): Operation {
         record(key, value, Pillar.BOTH)
         values[key] = value
         spanValues[key] = value
@@ -100,24 +103,36 @@ public class RecordingOperation internal constructor(
         return this
     }
 
-    override fun spanOnly(key: String, value: Any?): Operation {
+    override fun spanOnly(
+        key: String,
+        value: Any?,
+    ): Operation {
         record(key, value, Pillar.SPAN)
         spanValues[key] = value
         return this
     }
 
-    override fun logOnly(key: String, value: Any?): Operation {
+    override fun logOnly(
+        key: String,
+        value: Any?,
+    ): Operation {
         record(key, value, Pillar.LOG)
         logValues[key] = value
         return this
     }
 
-    override fun <E : Throwable> error(err: E, message: String): E {
+    override fun <E : Throwable> error(
+        err: E,
+        message: String,
+    ): E {
         errors += err
         return err
     }
 
-    override fun acknowledge(err: Throwable, message: String) {
+    override fun acknowledge(
+        err: Throwable,
+        message: String,
+    ) {
         errors += err
     }
 
@@ -127,7 +142,11 @@ public class RecordingOperation internal constructor(
         ended = true
     }
 
-    private fun record(key: String, value: Any?, pillar: Pillar) {
+    private fun record(
+        key: String,
+        value: Any?,
+        pillar: Pillar,
+    ) {
         observations += Observation(owner.nextSeq(), key, value, pillar)
     }
 
@@ -146,7 +165,11 @@ public class RecordingOperation internal constructor(
     }
 }
 
-private fun assertInOrder(stream: List<Observation>, matchers: List<Matcher>, owner: () -> String) {
+private fun assertInOrder(
+    stream: List<Observation>,
+    matchers: List<Matcher>,
+    owner: () -> String,
+) {
     var i = 0
     for (o in stream) {
         if (i < matchers.size && matchers[i].matches(o)) i++

@@ -37,8 +37,11 @@ internal class DefaultObserver(
  * Builds the production [Observer] from the standard dependencies. The name is applied to both the
  * logger and the tracer, mirroring `observability.NewObserver`.
  */
-public fun Observer(name: String, logger: Logger?, tracerProvider: TracerProvider?): Observer =
-    DefaultObserver(name, ensureLogger(logger), ensureTracerProvider(tracerProvider).tracer(name))
+public fun Observer(
+    name: String,
+    logger: Logger?,
+    tracerProvider: TracerProvider?,
+): Observer = DefaultObserver(name, ensureLogger(logger), ensureTracerProvider(tracerProvider).tracer(name))
 
 /** An [Observer] backed by noop logger and tracer, for code that just needs a working Observer in tests. */
 public fun noopObserver(name: String): Observer = DefaultObserver(name, NoopLogger, NoopTracer)
@@ -49,6 +52,7 @@ public fun noopObserver(name: String): Observer = DefaultObserver(name, NoopLogg
  */
 public interface ObserverFactory {
     public val logger: Logger
+
     public fun named(name: String): Observer
 }
 
@@ -57,6 +61,6 @@ public class DefaultObserverFactory(
     private val tracerProvider: TracerProvider,
 ) : ObserverFactory {
     override val logger: Logger get() = rootLogger
-    override fun named(name: String): Observer =
-        DefaultObserver(name, rootLogger, tracerProvider.tracer(name))
+
+    override fun named(name: String): Observer = DefaultObserver(name, rootLogger, tracerProvider.tracer(name))
 }

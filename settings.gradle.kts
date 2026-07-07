@@ -23,4 +23,13 @@ include(
     ":observability-testing",
     ":observability-koin",
     ":observability",
+    // Tier 1 — foundation & networking spine
+    ":errors",
+    ":identifiers",
+    ":random",
+    ":retry",
+    ":circuitbreaking",
+    ":httpclient-api",
+    ":httpclient-okhttp",
+    ":httpclient-ktor",
 )

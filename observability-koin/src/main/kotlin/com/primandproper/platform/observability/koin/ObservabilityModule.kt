@@ -19,13 +19,14 @@ import org.koin.dsl.module
  * val o11y: Observer = get { parametersOf("stream_manager") }
  * ```
  */
-public fun observabilityModule(observability: Observability): Module = module {
-    single { observability }
-    single { observability.observers }
-    single<Logger> { observability.logger }
-    single<TracerProvider> { observability.tracerProvider }
-    factory<Observer> { (name: String) -> get<ObserverFactory>().named(name) }
-}
+public fun observabilityModule(observability: Observability): Module =
+    module {
+        single { observability }
+        single { observability.observers }
+        single<Logger> { observability.logger }
+        single<TracerProvider> { observability.tracerProvider }
+        factory<Observer> { (name: String) -> get<ObserverFactory>().named(name) }
+    }
 
 /** Convenience for `get<Observer> { parametersOf(name) }`. */
 public fun org.koin.core.scope.Scope.observer(name: String): Observer = get { parametersOf(name) }

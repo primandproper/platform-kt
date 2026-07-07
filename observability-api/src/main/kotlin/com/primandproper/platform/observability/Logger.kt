@@ -17,13 +17,25 @@ public enum class Level { DEBUG, INFO, WARN, ERROR }
  */
 public interface Logger {
     public fun debug(msg: String)
+
     public fun info(msg: String)
+
     public fun warn(msg: String)
-    public fun error(whatWasHappening: String, err: Throwable?)
+
+    public fun error(
+        whatWasHappening: String,
+        err: Throwable?,
+    )
 
     public fun withName(name: String): Logger
-    public fun withValue(key: String, value: Any?): Logger
+
+    public fun withValue(
+        key: String,
+        value: Any?,
+    ): Logger
+
     public fun withValues(values: Map<String, Any?>): Logger
+
     public fun withError(err: Throwable): Logger
 
     /** Attaches the span's trace and span IDs so every subsequent line correlates with the trace. */
@@ -39,7 +51,10 @@ public interface Logger {
 public fun ensureLogger(logger: Logger?): Logger = logger ?: NoopLogger
 
 /** Applies [name] to [logger], mirroring `logging.NewNamedLogger`. */
-public fun namedLogger(logger: Logger?, name: String): Logger = ensureLogger(logger).withName(name)
+public fun namedLogger(
+    logger: Logger?,
+    name: String,
+): Logger = ensureLogger(logger).withName(name)
 
 /**
  * A logger that discards everything. Used as the safe default and in tests that don't assert on
@@ -47,14 +62,28 @@ public fun namedLogger(logger: Logger?, name: String): Logger = ensureLogger(log
  */
 public object NoopLogger : Logger {
     override fun debug(msg: String) {}
+
     override fun info(msg: String) {}
+
     override fun warn(msg: String) {}
-    override fun error(whatWasHappening: String, err: Throwable?) {}
+
+    override fun error(
+        whatWasHappening: String,
+        err: Throwable?,
+    ) {}
 
     override fun withName(name: String): Logger = this
-    override fun withValue(key: String, value: Any?): Logger = this
+
+    override fun withValue(
+        key: String,
+        value: Any?,
+    ): Logger = this
+
     override fun withValues(values: Map<String, Any?>): Logger = this
+
     override fun withError(err: Throwable): Logger = this
+
     override fun withSpan(span: Span): Logger = this
+
     override fun clone(): Logger = this
 }

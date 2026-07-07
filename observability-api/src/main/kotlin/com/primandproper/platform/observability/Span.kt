@@ -1,9 +1,9 @@
 package com.primandproper.platform.observability
 
-import io.opentelemetry.context.Context as OtelContext
 import io.opentelemetry.extension.kotlin.asContextElement
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.CoroutineContext
+import io.opentelemetry.context.Context as OtelContext
 
 /**
  * The active span type. Aliased straight to OpenTelemetry's [io.opentelemetry.api.trace.Span], the
@@ -16,8 +16,7 @@ public typealias Span = io.opentelemetry.api.trace.Span
  * for the lifetime of the coroutine — surviving hops between dispatcher threads. This is the bridge
  * that lets trace context propagate implicitly through `suspend` calls instead of a threaded `ctx`.
  */
-public fun Span.asCoroutineContextElement(): CoroutineContext.Element =
-    OtelContext.current().with(this).asContextElement()
+public fun Span.asCoroutineContextElement(): CoroutineContext = OtelContext.current().with(this).asContextElement()
 
 /**
  * The idiomatic per-operation scope — the Android analog of Go's `ctx, op := o11y.Begin(ctx); defer

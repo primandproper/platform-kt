@@ -38,7 +38,6 @@ internal class OtelTracer(
 public class OtelTracerProvider internal constructor(
     private val sdk: OpenTelemetrySdk,
 ) : TracerProvider {
-
     override fun tracer(name: String): Tracer = OtelTracer(sdk.getTracer(name))
 
     override fun forceFlush() {
@@ -60,11 +59,12 @@ public class OtelTracerProvider internal constructor(
             sampleRatio: Double = 1.0,
             useHttp: Boolean = false,
         ): OtelTracerProvider {
-            val exporter: SpanExporter = if (useHttp) {
-                OtlpHttpSpanExporter.builder().setEndpoint(endpoint).build()
-            } else {
-                OtlpGrpcSpanExporter.builder().setEndpoint(endpoint).build()
-            }
+            val exporter: SpanExporter =
+                if (useHttp) {
+                    OtlpHttpSpanExporter.builder().setEndpoint(endpoint).build()
+                } else {
+                    OtlpGrpcSpanExporter.builder().setEndpoint(endpoint).build()
+                }
             return create(serviceName, exporter, sampleRatio)
         }
 
@@ -74,20 +74,23 @@ public class OtelTracerProvider internal constructor(
             exporter: SpanExporter,
             sampleRatio: Double = 1.0,
         ): OtelTracerProvider {
-            val resource = Resource.getDefault().merge(
-                Resource.create(Attributes.of(AttributeKey.stringKey(SERVICE_NAME_KEY), serviceName)),
-            )
+            val resource =
+                Resource.getDefault().merge(
+                    Resource.create(Attributes.of(AttributeKey.stringKey(SERVICE_NAME_KEY), serviceName)),
+                )
 
-            val sdkTracerProvider = SdkTracerProvider.builder()
-                .setResource(resource)
-                .setSampler(Sampler.parentBased(Sampler.traceIdRatioBased(sampleRatio)))
-                .addSpanProcessor(BatchSpanProcessor.builder(exporter).build())
-                .build()
+            val sdkTracerProvider =
+                SdkTracerProvider.builder()
+                    .setResource(resource)
+                    .setSampler(Sampler.parentBased(Sampler.traceIdRatioBased(sampleRatio)))
+                    .addSpanProcessor(BatchSpanProcessor.builder(exporter).build())
+                    .build()
 
-            val sdk = OpenTelemetrySdk.builder()
-                .setTracerProvider(sdkTracerProvider)
-                .setPropagators(ContextPropagators.create(W3CTraceContextPropagator.getInstance()))
-                .build()
+            val sdk =
+                OpenTelemetrySdk.builder()
+                    .setTracerProvider(sdkTracerProvider)
+                    .setPropagators(ContextPropagators.create(W3CTraceContextPropagator.getInstance()))
+                    .build()
 
             return OtelTracerProvider(sdk)
         }

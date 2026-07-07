@@ -11,10 +11,22 @@ import io.opentelemetry.api.trace.StatusCode
  * (see the `observability-testing` module).
  */
 public interface Operation {
-    public fun set(key: String, value: Any?): Operation
+    public fun set(
+        key: String,
+        value: Any?,
+    ): Operation
+
     public fun set(vararg pairs: Pair<String, Any?>): Operation
-    public fun spanOnly(key: String, value: Any?): Operation
-    public fun logOnly(key: String, value: Any?): Operation
+
+    public fun spanOnly(
+        key: String,
+        value: Any?,
+    ): Operation
+
+    public fun logOnly(
+        key: String,
+        value: Any?,
+    ): Operation
 
     /** The running logger, carrying every [set]/[logOnly] value and the span link. */
     public val logger: Logger
@@ -23,10 +35,16 @@ public interface Operation {
     public val span: Span
 
     /** Records [err] on the span and logs it, then returns it for `throw op.error(e, "...")`. */
-    public fun <E : Throwable> error(err: E, message: String): E
+    public fun <E : Throwable> error(
+        err: E,
+        message: String,
+    ): E
 
     /** Records [err] on the span and logs it, without rethrowing. Mirrors Go's `Acknowledge`. */
-    public fun acknowledge(err: Throwable, message: String)
+    public fun acknowledge(
+        err: Throwable,
+        message: String,
+    )
 
     /** Installs the span as the current OTel context on this thread; close to restore. Used by [spanBlocking]. */
     public fun makeCurrent(): AutoCloseable
@@ -42,7 +60,10 @@ internal class DefaultOperation(
     private var current: Logger = spanLinkedLogger
     override val logger: Logger get() = current
 
-    override fun set(key: String, value: Any?): Operation {
+    override fun set(
+        key: String,
+        value: Any?,
+    ): Operation {
         span.setAttributeAny(key, value)
         current = current.withValue(key, value)
         return this
@@ -53,26 +74,41 @@ internal class DefaultOperation(
         return this
     }
 
-    override fun spanOnly(key: String, value: Any?): Operation {
+    override fun spanOnly(
+        key: String,
+        value: Any?,
+    ): Operation {
         span.setAttributeAny(key, value)
         return this
     }
 
-    override fun logOnly(key: String, value: Any?): Operation {
+    override fun logOnly(
+        key: String,
+        value: Any?,
+    ): Operation {
         current = current.withValue(key, value)
         return this
     }
 
-    override fun <E : Throwable> error(err: E, message: String): E {
+    override fun <E : Throwable> error(
+        err: E,
+        message: String,
+    ): E {
         recordAndLog(err, message)
         return err
     }
 
-    override fun acknowledge(err: Throwable, message: String) {
+    override fun acknowledge(
+        err: Throwable,
+        message: String,
+    ) {
         recordAndLog(err, message)
     }
 
-    private fun recordAndLog(err: Throwable, message: String) {
+    private fun recordAndLog(
+        err: Throwable,
+        message: String,
+    ) {
         if (span.isRecording) {
             span.recordException(err)
             span.setStatus(StatusCode.ERROR, message)
@@ -92,7 +128,10 @@ internal class DefaultOperation(
  * falling back to `toString()` for anything exotic. No-ops on a non-recording (noop/sampled-out)
  * span, so callers never branch.
  */
-internal fun Span.setAttributeAny(key: String, value: Any?) {
+internal fun Span.setAttributeAny(
+    key: String,
+    value: Any?,
+) {
     if (!isRecording) return
     when (value) {
         null -> setAttribute(key, "null")

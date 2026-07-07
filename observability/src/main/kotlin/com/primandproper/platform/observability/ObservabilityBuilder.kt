@@ -21,20 +21,23 @@ public fun Observability(configure: ObservabilityConfig.() -> Unit): Observabili
     val cfg = ObservabilityConfig().apply(configure)
     cfg.validate()
 
-    val logger: Logger = when (cfg.logging.provider) {
-        LoggingProvider.LOGCAT -> LogcatLogger(tag = cfg.serviceName, minLevel = cfg.logging.level)
-        LoggingProvider.NOOP -> NoopLogger
-    }
+    val logger: Logger =
+        when (cfg.logging.provider) {
+            LoggingProvider.LOGCAT -> LogcatLogger(tag = cfg.serviceName, minLevel = cfg.logging.level)
+            LoggingProvider.NOOP -> NoopLogger
+        }
 
-    val tracerProvider: TracerProvider = when (cfg.tracing.provider) {
-        TracingProvider.OTEL -> OtelTracerProvider.create(
-            serviceName = cfg.serviceName,
-            endpoint = cfg.tracing.endpoint,
-            sampleRatio = cfg.tracing.sampleRatio,
-            useHttp = cfg.tracing.useHttp,
-        )
-        TracingProvider.NOOP -> NoopTracerProvider
-    }
+    val tracerProvider: TracerProvider =
+        when (cfg.tracing.provider) {
+            TracingProvider.OTEL ->
+                OtelTracerProvider.create(
+                    serviceName = cfg.serviceName,
+                    endpoint = cfg.tracing.endpoint,
+                    sampleRatio = cfg.tracing.sampleRatio,
+                    useHttp = cfg.tracing.useHttp,
+                )
+            TracingProvider.NOOP -> NoopTracerProvider
+        }
 
     return DefaultObservability(logger, tracerProvider)
 }

@@ -20,7 +20,6 @@ public class LogcatLogger private constructor(
     private val values: Map<String, Any?>,
     private val throwable: Throwable?,
 ) : Logger {
-
     public constructor(tag: String = "platform", minLevel: Level = Level.INFO) :
         this(tag, minLevel, emptyMap(), null)
 
@@ -50,13 +49,19 @@ public class LogcatLogger private constructor(
         if (enabled(Level.WARN)) Log.w(tag, render(msg))
     }
 
-    override fun error(whatWasHappening: String, err: Throwable?) {
+    override fun error(
+        whatWasHappening: String,
+        err: Throwable?,
+    ) {
         if (enabled(Level.ERROR)) Log.e(tag, render(whatWasHappening), err ?: throwable)
     }
 
     override fun withName(name: String): Logger = copy(tag = name)
 
-    override fun withValue(key: String, value: Any?): Logger = copy(values = values + (key to value))
+    override fun withValue(
+        key: String,
+        value: Any?,
+    ): Logger = copy(values = values + (key to value))
 
     override fun withValues(values: Map<String, Any?>): Logger = copy(values = this.values + values)
 

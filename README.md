@@ -57,6 +57,27 @@ val observers: ObserverFactory = o11y.observers
 Dependencies flow downward: backends and the umbrella depend on `:observability-api`; the api
 depends on nothing in this repo.
 
+### Tier 1 — foundation & networking spine
+
+The small, widely-depended-on substrate every other package sits on. All pure Kotlin/JVM (so they
+run on both server and Android), coroutine-native where it matters, and traced into the
+observability stack.
+
+| Module | Type | What |
+|---|---|---|
+| `:errors` | Kotlin/JVM | Error sentinels + wrapping (`newError`, `wrap`, `isError`/`asError`), HTTP `ErrorCode`→`toApiError`/`toHttpStatus`, pure gRPC `GrpcCode` mapping. No framework deps. Owns the `ErrCircuitBroken` sentinel. |
+| `:identifiers` | Kotlin/JVM | Dependency-free string IDs: `newUlid()`/`isValidUlid()` (26-char, sortable, time-ordered — the `xid` analog) and `newUuid()`/`isValidUuid()` (UUIDv4). |
+| `:random` | Kotlin/JVM | Crypto-secure random strings/bytes (`RandomGenerator`) over `SecureRandom` — hex/Base32/Base64url/custom-alphabet encodings, slice helpers — span+log instrumented via `:observability-api`. `noop`/`mock` doubles. |
+| `:retry` | Kotlin/JVM | Coroutine-native exponential backoff + jitter: `Policy.execute { }` (`suspend`/`delay`), config DSL + `validate()`, plus a `Flow.retryWhen` variant. |
+| `:circuitbreaking` | Kotlin/JVM | Coroutine circuit breaker: `execute { }`, `CircuitState` `StateFlow`, config DSL + `validate()`, noop + recording doubles, and a `partitioned` per-key `KeyedCircuitBreaker`. Depends on `:errors` + `:observability-api`. |
+| `:httpclient-api` | Kotlin/JVM | The HTTP contract: `HttpClient`, request/response models, `HttpClientConfig` + DSL + `validate()`, retry-hook seam, **header redaction** (security), OTel span recording, noop/fake client. Depends on `:observability-api` + OTel **api**. |
+| `:httpclient-okhttp` | Kotlin/JVM | `HttpClient` over OkHttp, OTel-instrumented. Client-side / Android-friendly backend. |
+| `:httpclient-ktor` | Kotlin/JVM | `HttpClient` over the Ktor client (CIO), OTel-instrumented. Server-side backend. |
+
+Traced HTTP calls parent under the enclosing observability `span { }` via the coroutine-context OTel
+`Context` — no explicit context threading. Sensitive headers (`Authorization`, `Cookie`, …) are
+redacted in `:httpclient-api` **before** any request/response data reaches a span.
+
 ## Design notes
 
 - **Context propagation is implicit.** `span { }` installs the span into the coroutine context via

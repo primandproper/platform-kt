@@ -1,0 +1,15 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.{kt,kts}]
+# This library leans on the idiomatic-Kotlin factory-function idiom — a top-level function named
+# like the type it builds (e.g. `ExponentialBackoffPolicy(config): Policy`, mirroring stdlib
+# `Job()`, `MutableStateFlow()`). ktlint's function-naming rule flags any capitalized function
+# whose name doesn't exactly equal its return type, which these deliberately don't. Disable it
+# tree-wide rather than annotate every factory.
+ktlint_standard_function-naming = disabled
