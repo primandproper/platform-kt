@@ -41,4 +41,7 @@ include(
     ":featureflags-api",
     ":featureflags-launchdarkly",
     ":featureflags-android",
+    ":cryptography-api",
+    ":cryptography-jvm",
+    ":cryptography-android",
 )
