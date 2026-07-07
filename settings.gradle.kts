@@ -32,4 +32,7 @@ include(
     ":httpclient-api",
     ":httpclient-okhttp",
     ":httpclient-ktor",
+    // Tier 2 — core cross-surface services
+    ":secrets-api",
+    ":secrets-android",
 )
