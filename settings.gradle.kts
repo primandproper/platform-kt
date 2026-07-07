@@ -44,4 +44,7 @@ include(
     ":cryptography-api",
     ":cryptography-jvm",
     ":cryptography-android",
+    ":cache-api",
+    ":cache-redis",
+    ":cache-android",
 )
