@@ -1,11 +1,14 @@
 package com.primandproper.platform.featureflags.launchdarkly
 
+import com.launchdarkly.sdk.EvaluationDetail
 import com.launchdarkly.sdk.EvaluationReason
 import com.launchdarkly.sdk.LDContext
 import com.launchdarkly.sdk.LDValue
 import com.launchdarkly.sdk.LDValueType
 import com.launchdarkly.sdk.server.LDClient
 import com.launchdarkly.sdk.server.LDConfig
+import com.primandproper.platform.circuitbreaking.CircuitBreaker
+import com.primandproper.platform.circuitbreaking.ensureCircuitBreaker
 import com.primandproper.platform.featureflags.EvaluationContext
 import com.primandproper.platform.featureflags.FeatureFlagManager
 import com.primandproper.platform.featureflags.FlagAttributes
@@ -30,11 +33,96 @@ public class FeatureFlagEvaluationException(
 ) : RuntimeException("error evaluating flag \"$feature\": ${reason.errorKind ?: reason.kind}")
 
 /**
+ * The seam through which the manager performs a LaunchDarkly variation evaluation. Production wires it
+ * to a live [LDClient]'s `*VariationDetail` methods (see [LDClientEvaluator]); tests supply a double
+ * that records calls and can throw, so the circuit-breaker wrap is exercised without a live client. It
+ * is the sole write-side crossing to the vendor evaluation API.
+ */
+internal interface FlagEvaluator {
+    fun boolDetail(
+        feature: String,
+        context: LDContext,
+        default: Boolean,
+    ): EvaluationDetail<Boolean>
+
+    fun stringDetail(
+        feature: String,
+        context: LDContext,
+        default: String,
+    ): EvaluationDetail<String>
+
+    fun intDetail(
+        feature: String,
+        context: LDContext,
+        default: Int,
+    ): EvaluationDetail<Int>
+
+    fun doubleDetail(
+        feature: String,
+        context: LDContext,
+        default: Double,
+    ): EvaluationDetail<Double>
+
+    fun jsonDetail(
+        feature: String,
+        context: LDContext,
+        default: LDValue,
+    ): EvaluationDetail<LDValue>
+
+    fun close()
+}
+
+/** The production [FlagEvaluator]: a thin adapter over a live [LDClient]. */
+private class LDClientEvaluator(private val client: LDClient) : FlagEvaluator {
+    override fun boolDetail(
+        feature: String,
+        context: LDContext,
+        default: Boolean,
+    ): EvaluationDetail<Boolean> = client.boolVariationDetail(feature, context, default)
+
+    override fun stringDetail(
+        feature: String,
+        context: LDContext,
+        default: String,
+    ): EvaluationDetail<String> = client.stringVariationDetail(feature, context, default)
+
+    override fun intDetail(
+        feature: String,
+        context: LDContext,
+        default: Int,
+    ): EvaluationDetail<Int> = client.intVariationDetail(feature, context, default)
+
+    override fun doubleDetail(
+        feature: String,
+        context: LDContext,
+        default: Double,
+    ): EvaluationDetail<Double> = client.doubleVariationDetail(feature, context, default)
+
+    override fun jsonDetail(
+        feature: String,
+        context: LDContext,
+        default: LDValue,
+    ): EvaluationDetail<LDValue> = client.jsonValueVariationDetail(feature, context, default)
+
+    override fun close() {
+        client.close()
+    }
+}
+
+/**
  * A [FeatureFlagManager] backed by the LaunchDarkly Java server SDK. This is the only place the
  * provider crosses the boundary between the platform-owned [EvaluationContext]/values and the
  * LaunchDarkly [LDContext]/[LDValue] types. Every evaluation opens a span and records the subject,
  * feature key, default, and resolved value; an error reason from the SDK is recorded and the caller
  * gets the supplied default — matching the platform-go behavior.
+ *
+ * Each vendor evaluation runs under the injected [circuitBreaker], mirroring platform-go's
+ * `featureflags/launchdarkly`. Go drives the raw `CanProceed/Succeeded/Failed` quartet by hand; the
+ * coroutine-native breaker here is `execute`-shaped, so the vendor call is wrapped in a single
+ * [CircuitBreaker.execute]: an open breaker rejects with `ErrCircuitBroken` before the SDK is called,
+ * and a thrown vendor error counts as a failure. A flag miss (the SDK returns an error *reason* rather
+ * than throwing) resolves to the supplied default and returns normally — an expected control-flow
+ * outcome, so it counts as a success, not a breaker failure.
  *
  * Construct it from a live client, or use [launchDarklyFeatureFlagManager] to build a client from
  * config. Tests inject a client fed by the SDK's offline `TestData` data source, so the
@@ -43,11 +131,24 @@ public class FeatureFlagEvaluationException(
  * TODO(posthog): the PostHog server backend from platform-go is a documented seam — it belongs in a
  * separate `:featureflags-posthog` module wrapping the PostHog SDK behind this same interface.
  */
-public class LaunchDarklyFeatureFlagManager(
-    private val client: LDClient,
-    observer: Observer? = null,
+public class LaunchDarklyFeatureFlagManager internal constructor(
+    private val evaluator: FlagEvaluator,
+    observer: Observer?,
+    private val circuitBreaker: CircuitBreaker,
 ) : FeatureFlagManager {
     private val o11y: Observer = observer ?: noopObserver(SERVICE_NAME)
+
+    /**
+     * Builds a manager over a live [client].
+     *
+     * @param observer optional observer; defaults to a noop observer.
+     * @param circuitBreaker optional breaker; defaults to the always-closed noop breaker.
+     */
+    public constructor(
+        client: LDClient,
+        observer: Observer? = null,
+        circuitBreaker: CircuitBreaker? = null,
+    ) : this(LDClientEvaluator(client), observer, ensureCircuitBreaker(circuitBreaker))
 
     override suspend fun canUseFeature(
         feature: String,
@@ -55,7 +156,10 @@ public class LaunchDarklyFeatureFlagManager(
     ): Boolean =
         o11y.span("canUseFeature") {
             set(Keys.USER_ID to evalCtx.targetingKey, FlagAttributes.FEATURE to feature)
-            val detail = withContext(Dispatchers.IO) { client.boolVariationDetail(feature, toLDContext(evalCtx), false) }
+            val detail =
+                circuitBreaker.execute {
+                    withContext(Dispatchers.IO) { evaluator.boolDetail(feature, toLDContext(evalCtx), false) }
+                }
             if (detail.reason.isError()) {
                 acknowledge(FeatureFlagEvaluationException(feature, detail.reason), "checking feature flag variation")
                 return@span false
@@ -73,8 +177,8 @@ public class LaunchDarklyFeatureFlagManager(
         o11y.span("getStringValue") {
             set(Keys.USER_ID to evalCtx.targetingKey, FlagAttributes.FEATURE to feature)
             val detail =
-                withContext(Dispatchers.IO) {
-                    client.stringVariationDetail(feature, toLDContext(evalCtx), defaultValue)
+                circuitBreaker.execute {
+                    withContext(Dispatchers.IO) { evaluator.stringDetail(feature, toLDContext(evalCtx), defaultValue) }
                 }
             if (detail.reason.isError()) {
                 acknowledge(
@@ -96,8 +200,8 @@ public class LaunchDarklyFeatureFlagManager(
         o11y.span("getInt64Value") {
             set(Keys.USER_ID to evalCtx.targetingKey, FlagAttributes.FEATURE to feature)
             val detail =
-                withContext(Dispatchers.IO) {
-                    client.intVariationDetail(feature, toLDContext(evalCtx), defaultValue.toInt())
+                circuitBreaker.execute {
+                    withContext(Dispatchers.IO) { evaluator.intDetail(feature, toLDContext(evalCtx), defaultValue.toInt()) }
                 }
             if (detail.reason.isError()) {
                 acknowledge(FeatureFlagEvaluationException(feature, detail.reason), "checking feature flag int variation")
@@ -116,8 +220,8 @@ public class LaunchDarklyFeatureFlagManager(
         o11y.span("getFloat64Value") {
             set(Keys.USER_ID to evalCtx.targetingKey, FlagAttributes.FEATURE to feature)
             val detail =
-                withContext(Dispatchers.IO) {
-                    client.doubleVariationDetail(feature, toLDContext(evalCtx), defaultValue)
+                circuitBreaker.execute {
+                    withContext(Dispatchers.IO) { evaluator.doubleDetail(feature, toLDContext(evalCtx), defaultValue) }
                 }
             if (detail.reason.isError()) {
                 acknowledge(
@@ -139,8 +243,8 @@ public class LaunchDarklyFeatureFlagManager(
         o11y.span("getObjectValue") {
             set(Keys.USER_ID to evalCtx.targetingKey, FlagAttributes.FEATURE to feature)
             val detail =
-                withContext(Dispatchers.IO) {
-                    client.jsonValueVariationDetail(feature, toLDContext(evalCtx), toLDValue(defaultValue))
+                circuitBreaker.execute {
+                    withContext(Dispatchers.IO) { evaluator.jsonDetail(feature, toLDContext(evalCtx), toLDValue(defaultValue)) }
                 }
             if (detail.reason.isError()) {
                 acknowledge(
@@ -153,7 +257,7 @@ public class LaunchDarklyFeatureFlagManager(
         }
 
     override fun close() {
-        client.close()
+        evaluator.close()
     }
 }
 
@@ -163,16 +267,18 @@ public class LaunchDarklyFeatureFlagManager(
  * test swaps in an offline `TestData` data source. Mirrors platform-go's `NewFeatureFlagManager`
  * plus its variadic config-modifier hook.
  *
+ * @param circuitBreaker optional breaker threaded into the manager; defaults to the noop breaker.
  * @throws IllegalArgumentException when the SDK key is blank.
  */
 public fun launchDarklyFeatureFlagManager(
     config: LaunchDarklyConfig,
     observer: Observer? = null,
+    circuitBreaker: CircuitBreaker? = null,
     configure: LDConfig.Builder.() -> Unit = {},
 ): LaunchDarklyFeatureFlagManager {
     require(config.sdkKey.isNotBlank()) { "missing SDK key" }
     val ldConfig = LDConfig.Builder().apply(configure).build()
-    return LaunchDarklyFeatureFlagManager(LDClient(config.sdkKey, ldConfig), observer)
+    return LaunchDarklyFeatureFlagManager(LDClient(config.sdkKey, ldConfig), observer, circuitBreaker)
 }
 
 private fun EvaluationReason.isError(): Boolean = kind == EvaluationReason.Kind.ERROR

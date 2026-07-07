@@ -1,22 +1,30 @@
 # Porting Status & Game Plan: `platform-go` → `platform-kt`
 
-_Generated 2026-07-06. Compares the Kotlin port against its Go source at `../platform-go`._
+_Generated 2026-07-06; updated 2026-07-07 (port complete — Tiers 1–4 all landed). Compares the Kotlin
+port against its Go source at `../platform-go`._
 
 ## Where we stand
 
-**13 of 40 packages ported, across 28 Gradle modules** — `observability` (the original), all of
+**38 packages ported, across 73 Gradle modules** — `observability` (the original), all of
 **Tier 1** (foundation & networking spine: `errors`, `identifiers`, `random`, `retry`,
-`circuitbreaking`, `httpclient`), and all of **Tier 2** (`cache`, `cryptography`, `secrets`,
-`featureflags`, `analytics`).
+`circuitbreaking`, `httpclient`), all of **Tier 2** (`cache`, `cryptography`, `secrets`,
+`featureflags`, `analytics`), all of **Tier 3** — the server platform (`server`, `routing`,
+`database`, `messagequeue`, `distributedlock`, `email`, `eventstream`, `uploads`, `search`,
+`ratelimiting`, `capitalism`, `healthcheck`, `cookies`, `encoding`), and all of **Tier 4** — domain,
+AI & utilities (`llm`, `embeddings`, `authentication`, `notifications`, `qrcodes`, `compression`,
+`files`, `numbers`, `bitmask`, `version`, `fake`, `testutils`). Only the three deliberately-skipped Go
+idioms remain (`pointer`, `reflection`, `panicking`).
 
-> ✅ **Everything now compiles, tests, and lints green.** As of 2026-07-06 the machine has a
-> toolchain (tracked `mise.toml`: JDK 17 + Gradle 8.11 + Android SDK), so the previously
-> hand-written-blind code has been built for real. Run it yourself with
-> `mise exec -- ./gradlew clean build`. First-build friction that was fixed to reach green:
-> an `observability-api` `CoroutineContext` return-type mismatch, two coroutine-test API slips in
-> `retry`, coroutine stacktrace-recovery breaking exception-identity assertions (disabled tree-wide
-> under test), and ktlint naming (`.editorconfig` allows the type-named factory-function idiom).
-> The `com.android.library` modules build here too (compileSdk/minSdk from the catalog).
+> ✅ **The whole tree builds, tests, and lints green: 1,410 tests, 0 failures across 73 modules**
+> (`mise exec -- ./gradlew build`, 2026-07-07). Tiers 3 and 4 were ported by parallel subagents (one
+> package each, in waves) writing to disjoint module directories, then integrated and greened centrally
+> — new vendor coordinates declared directly in each module's `build.gradle.kts` (Exposed/Postgres, Ktor
+> server, AWS S3, stripe-java, Elasticsearch/pgvector, Lettuce, BouncyCastle, ZXing, zstd-jni, Snappy,
+> Testcontainers, kotlinx.serialization) so parallel work never touched the shared version catalog.
+
+The machine has a toolchain (tracked `mise.toml`: JDK 17 + Gradle 8.11 + Android SDK); the
+`com.android.library` modules build here too (compileSdk/minSdk from the catalog). Build it yourself
+with `mise exec -- ./gradlew build`.
 
 Landed with Tier 1 (see the [Tier 1 table](#tier-1--foundation--networking-spine--done) for detail):
 
@@ -41,10 +49,10 @@ inside that port:
   before span attachment), where the HTTP span integration actually lives. Security property, not a
   feature.
 - **Test coverage is thin** (2 files): propagation + recording. `LogcatLogger`, config `validate()`,
-  and the umbrella builder are unpinned.
+  and the umbrella builder are unpinned — the one open test-backfill item (see [Open follow-ups](#open-follow-ups)).
 
-That's the whole of "faithfulness." The rest of this document is the part that matters now: **what to
-port next, and why.**
+That's the whole of "faithfulness." The rest of this document records **what was ported, in which
+tiers, and the follow-ups that remain** — the tables below are the authoritative per-package status.
 
 ---
 
@@ -65,20 +73,23 @@ Porting therefore comes in three modes:
    *sends* push server-side but Android *receives* it; `eventstream` *emits* SSE/WS but Android *consumes* it.
    These port **directly on the server** and additionally want a flipped client counterpart on Android.
 
-Only one package is genuinely unnecessary in Kotlin: **`pointer`** (Kotlin nullability + stdlib obviate it).
-A handful more are low-value (`reflection`, `panicking`, `version`) but still portable if a consumer needs them.
+Three packages were deliberately skipped as Go idioms with no worthwhile Kotlin analog — **`pointer`**
+(Kotlin nullability + stdlib obviate it), **`reflection`**, and **`panicking`** (see [Skip](#skip)).
+Everything else was ported, `version` included.
 
 **Target legend:** 🖥️ Server (JVM) · 📱 Android · 🌐 Both
 
 ---
 
-## Game plan — priority tiers (spanning both surfaces)
+## Ported packages, by tier (spanning both surfaces)
+
+_The tiers below were the porting order; all four are now complete. They double as the per-package
+status record._
 
 ### Tier 1 — Foundation & networking spine ✅ DONE
 
 Small, depended-on by nearly everything, and the tracing-aware HTTP client ties straight into the
-observability port already in place. **All ported (2026-07-06); pending a compile/test pass on a
-JVM/Android-equipped machine.**
+observability port already in place. **All ported and green.**
 
 | ✅ | Pkg | LOC | Target | Module(s) | Notes on the port |
 |:--:|---|--:|:--:|---|---|
@@ -97,57 +108,64 @@ vendor backends are documented `TODO(<vendor>)` seams, not silent drops. **234 t
 
 | ✅ | Pkg | LOC | Target | Module(s) | Primary backend · Android · seams |
 |:--:|---|--:|:--:|---|---|
-| ✅ | **cache** | 1744 | 🌐 | `:cache-api` + `:cache-redis` + `:cache-android` | In-mem + Redis (Lettuce, async→coroutine; CRC16 cluster slots) · DataStore + TTL envelope · `TODO`: circuitbreaking wrap, metrics, cluster client. |
+| ✅ | **cache** | 1744 | 🌐 | `:cache-api` + `:cache-redis` + `:cache-android` | In-mem + Redis (Lettuce, async→coroutine; CRC16 cluster slots; `:circuitbreaking` wrap, degrades to miss/no-op when open) · DataStore + TTL envelope · `TODO`: metrics, cluster client. |
 | ✅ | **cryptography** | 680 | 🌐 | `:cryptography-api` + `:cryptography-jvm` + `:cryptography-android` | AES-256-GCM (`javax.crypto`) + hashers (sha256/512, adler32, hand-rolled CRC-64/FNV KAT-matched to Go) · AndroidKeyStore AES-GCM · `TODO`: salsa20. |
 | ✅ | **secrets** | 760 | 🌐 | `:secrets-api` + `:secrets-android` | `env` (value never touches a span/log) · EncryptedSharedPreferences + Keystore (minSdk 23) · `TODO`: gcp, ssm, kubectl. |
-| ✅ | **featureflags** | 1169 | 🌐 | `:featureflags-api` + `:featureflags-launchdarkly` + `:featureflags-android` | LaunchDarkly server SDK (offline TestData-tested) · DataStore local store · `TODO`: posthog, LD-android, circuitbreaking wrap. |
+| ✅ | **featureflags** | 1169 | 🌐 | `:featureflags-api` + `:featureflags-launchdarkly` + `:featureflags-android` | LaunchDarkly server SDK (offline TestData-tested; `:circuitbreaking` wrap, returns default + `ErrCircuitBroken` when open) · DataStore local store · `TODO`: posthog, LD-android. |
 | ✅ | **analytics** | 1172 | 🌐 | `:analytics-api` + `:analytics-segment` + `:analytics-android` | Segment Java SDK (behind an execute-shaped CircuitBreaker) + `multisource` composite · on-device buffering reporter · `TODO`: posthog, segment-android. |
 
-> **Follow-ups from the parallel port:** `cache-redis` and `featureflags-launchdarkly` should
-> reattach the `:circuitbreaking` wrap that platform-go has (dropped only because those port
-> worktrees branched before `:circuitbreaking` was committed; `:analytics-segment`, ported from the
-> green baseline, already wires it). Android modules for `featureflags`/`analytics` use the sanctioned
-> local fallback because the LaunchDarkly/Segment client SDKs need a live `Context` — wiring those is
-> the remaining Android work.
+> **Follow-ups from the parallel port:** ✅ `cache-redis` and `featureflags-launchdarkly` now reattach
+> the `:circuitbreaking` wrap that platform-go has (2026-07-07) — faithful to each package's open-breaker
+> semantics: cache degrades to a miss/no-op, featureflags returns the default value + `ErrCircuitBroken`.
+> Still open: the Android modules for `featureflags`/`analytics` use the sanctioned local fallback
+> because the LaunchDarkly/Segment client SDKs need a live `Context` — wiring those is the remaining
+> Android work.
 
-### Tier 3 — Server platform: the Kotlin server counterpart (backend swap)
+### Tier 3 — Server platform: the Kotlin server counterpart (backend swap) ✅ DONE
 
 **This is the "keep the server things" bucket** — a near-1:1 mirror of `platform-go`, retargeted from
-Go stdlib/vendors to the JVM ecosystem. In-scope, just server-first.
+Go stdlib/vendors to the JVM ecosystem. **All 14 packages ported (2026-07-07)** as core `-api` +
+primary backend(s) + a real Android module where the surface is client-relevant, per the Tier 2
+anatomy (interface + config + `noop` + `mock` + primary impl). Each package's remaining vendor
+backends are documented `TODO(<vendor>)` seams, not silent drops.
 
-| Pkg | LOC | Target | What it does | KT mapping |
-|---|--:|:--:|---|---|
-| **server** (http, grpc) | 507 | 🖥️ | Multi-service HTTP/gRPC server | Ktor / Spring Boot / gRPC-Kotlin. |
-| **routing** | 794 | 🖥️ | Router + middleware + route params | Ktor routing / Spring MVC. |
-| **database** | 2879 | 🖥️ | Relational-DB abstraction | Exposed / jOOQ / JDBC / R2DBC. Idiom differs — abstraction ports, impl is fresh. |
-| **messagequeue** | 2451 | 🖥️ | Publisher/consumer (Pub/Sub, SQS, Redis) | JVM client libs behind the same publisher/consumer interface. |
-| **distributedlock** | 1608 | 🖥️ | Cross-process mutual exclusion | Redis (Lettuce/Jedis) + Postgres advisory locks — direct analog. |
-| **email** | 1347 | 🖥️ | Send email (Mailgun/SendGrid/…) | Vendor JVM SDKs / SMTP behind the sender interface. |
-| **eventstream** | 903 | 🌐 | SSE / WebSocket | Server emit (Ktor SSE/WS) ports directly; Android additionally wants the **consume** side (OkHttp SSE/WS → `Flow`). |
-| **uploads** | 1861 | 🌐 | Object storage (S3/GCS/R2/B2) | Server: AWS/GCP JVM SDKs. Android: signed-URL client uploader over `httpclient`. |
-| **search** (text, vector) | 2972 | 🖥️ | Search-index management | ES/OpenSearch + pgvector JVM clients. |
-| **ratelimiting** | 376 | 🌐 | Token-bucket limiter | Server endpoint protection; optional client-side throttle. |
-| **capitalism** | 680 | 🖥️ | Payment webhooks + subscriptions | Stripe/etc. JVM SDKs server-side (Android in-app purchase is Play Billing — separate). |
-| **healthcheck** | 205 | 🖥️ | Component health registry | Direct port; expose via Ktor/Spring actuator-style endpoint. |
-| **cookies** | 222 | 🖥️ | Secure cookie encode/manage | Ktor cookie handling. |
-| **encoding** | 1206 | 🖥️ | HTTP response encoding | Content negotiation / serializers (kotlinx.serialization). |
+| ✅ | Pkg | LOC | Target | Module(s) | Primary backend · seams |
+|:--:|---|--:|:--:|---|---|
+| ✅ | **server** (http, grpc) | 507 | 🖥️ | `:server-api` + `:server-ktor` | Ktor/Netty HTTP; `MountableHandler` keeps Go's router↔server split · `TODO(grpc-kotlin)`, tls, cors. |
+| ✅ | **routing** | 794 | 🖥️ | `:routing-api` + `:routing-ktor` | Ktor routing; framework-independent `RouteParamManager` · `TODO`: metrics, cors. |
+| ✅ | **database** | 2879 | 🖥️ | `:database-api` + `:database-exposed` | Postgres via Exposed/JDBC (H2 in tests) · `TODO`: mysql, sqlite, r2dbc, pooling. |
+| ✅ | **messagequeue** | 2451 | 🖥️ | `:messagequeue-api` + `:messagequeue-redis` | Redis pub/sub (Lettuce) under a CircuitBreaker · `TODO`: kafka, pubsub, sqs. |
+| ✅ | **distributedlock** | 1608 | 🖥️ | `:distributedlock-api` (+in-mem) + `:distributedlock-redis` + `:distributedlock-postgres` | Redis SET-NX + Postgres advisory locks · `TODO`: metrics, cluster. |
+| ✅ | **email** | 1347 | 🖥️ | `:email-api` + `:email-resend` | Resend REST over `:httpclient-api`; recipient-injection defense carried · `TODO`: sendgrid/mailgun/mailjet/postmark/ses. |
+| ✅ | **eventstream** | 903 | 🌐 | `:eventstream-api` + `:eventstream-ktor` + `:eventstream-android` | Ktor SSE/WS emit · OkHttp SSE/WS **consume**→`Flow` on Android (the direction flip). |
+| ✅ | **uploads** | 1861 | 🌐 | `:uploads-api` + `:uploads-s3` + `:uploads-android` | S3 (AWS SDK v2) + in-mem/filesystem buckets · signed-URL client uploader · `TODO`: gcs, r2, b2. |
+| ✅ | **search** (text, vector) | 2972 | 🖥️ | `:search-api` + `:search-elasticsearch` + `:search-pgvector` | ES low-level REST + pgvector/JDBC · `TODO`: algolia, qdrant, circuitbreaking. |
+| ✅ | **ratelimiting** | 376 | 🌐 | `:ratelimiting-api` + `:ratelimiting-redis` | `x/time/rate` token bucket ported bit-for-bit + Lettuce sliding-window · `TODO`: metrics, cluster. |
+| ✅ | **capitalism** | 680 | 🖥️ | `:capitalism-api` + `:capitalism-stripe` | stripe-java; offline webhook-signature verification · `TODO`: metrics. |
+| ✅ | **healthcheck** | 205 | 🖥️ | `:healthcheck` | Concurrent checks w/ per-check timeout · `TODO(server)` for the probe endpoint. |
+| ✅ | **cookies** | 222 | 🖥️ | `:cookies` | Secure cookie sealing via `:cryptography-jvm` AES-GCM (AEAD, not gorilla-wire-compatible; sealed value capped at a 30-day default). |
+| ✅ | **encoding** | 1206 | 🖥️ | `:encoding` | kotlinx.serialization JSON · `TODO`: xml, toml, yaml formats. |
 
-### Tier 4 — Domain, AI & utilities (portable; schedule opportunistically)
+### Tier 4 — Domain, AI & utilities ✅ DONE
 
-| Pkg | LOC | Target | What it does | Note |
-|---|--:|:--:|---|---|
-| **llm** | 578 | 🌐 | LLM completion (Anthropic, OpenAI) | Depends on `httpclient`. Use the latest Claude models via the Anthropic API. |
-| **embeddings** | 835 | 🌐 | Vector embeddings | Depends on `httpclient`. |
-| **authentication** (argon2, tokens, totp) | 1194 | 🌐 | Password hashing, tokens, TOTP | argon2/tokens server-side; `totp` + token parsing also client-relevant. |
-| **notifications** (async, mobile) | 1186 | 🌐 | Push send (APNs/FCM), async delivery | Server *sends*; Android *receives* (`FirebaseMessagingService`) — port both ends. |
-| **qrcodes** | 141 | 🌐 | QR generation (TOTP setup) | ZXing. Pairs with `authentication/totp`. |
-| **compression** | 158 | 🌐 | Zstd / S2 | JVM zstd bindings; useful under cache/uploads. |
-| **files** | 704 | 🌐 | Text file read helpers | Portable; Android scoped-storage caveat. |
-| **numbers** | 96 | 🌐 | Numeric utils (round/scale/yield) | Largely covered by stdlib/`BigDecimal`. |
-| **bitmask** | 149 | 🌐 | Immutable bitmask | `EnumSet` covers much of it. |
-| **fake** | 46 | 🌐 | Test data generation | Port with whatever needs fixtures. |
-| **testutils** | 265 | 🖥️ | Integration/load-test harness | Server test support. |
-| **version** | 73 | 🌐 | Build/VCS metadata injection | `BuildConfig` (Android) / gradle manifest (server). |
+**All 12 ported (2026-07-07)** as core `-api` + backend(s) where applicable, per the Tier 2 anatomy.
+AI/HTTP backends speak vendor REST over `:httpclient-api` (fake-client tested, no network); remaining
+vendors/backends are documented `TODO(<vendor>)` seams.
+
+| ✅ | Pkg | LOC | Target | Module(s) | Primary backend · seams |
+|:--:|---|--:|:--:|---|---|
+| ✅ | **llm** | 578 | 🌐 | `:llm-api` + `:llm-anthropic` | Anthropic Messages API over `:httpclient-api`, current Claude models (`claude-opus-4-8` default), key redacted · `TODO(openai)`. |
+| ✅ | **embeddings** | 835 | 🌐 | `:embeddings-api` + `:embeddings-openai` | OpenAI `/v1/embeddings` over `:httpclient-api` under a CircuitBreaker · `TODO`: cohere, ollama. |
+| ✅ | **authentication** | 1194 | 🌐 | `:authentication` (argon2/tokens/totp) | Argon2id (BouncyCastle) + HS256 JWT + RFC 6238 TOTP (javax.crypto), KAT/RFC-vector tested · `TODO(paseto)`. |
+| ✅ | **notifications** | 1186 | 🌐 | `:notifications-api` + `:notifications-fcm` + `:notifications-android` | FCM HTTP v1 over `:httpclient-api` · Android receive-side payload mapping · `TODO`: apns, `FirebaseMessagingService`. |
+| ✅ | **qrcodes** | 141 | 🌐 | `:qrcodes` | ZXing PNG (otpauth URIs); pairs with authentication/totp. |
+| ✅ | **compression** | 158 | 🌐 | `:compression` | Zstd (zstd-jni) + Snappy-framed as the S2 analog (wire-incompat noted) · `TODO(s2)`. |
+| ✅ | **files** | 704 | 🌐 | `:files` | java.nio line/chunk/slice readers (Go `\n`/`\r` semantics preserved). |
+| ✅ | **numbers** | 96 | 🌐 | `:numbers` | BigDecimal round/scale/scaleToYield (NaN/Inf propagated) + range validation. |
+| ✅ | **bitmask** | 149 | 🌐 | `:bitmask` | Immutable width-typed bitmask (ULong-backed; Go's `Bitmask[T Unsigned]` → explicit width). |
+| ✅ | **version** | 73 | 🌐 | `:version` | Build/VCS metadata holder + indented-JSON; ldflags→resource/manifest injection seam. |
+| ✅ | **fake** | 46 | 🌐 | `:fake` | Seedable kotlin-reflect data generator (deterministic, no faker lib). |
+| ✅ | **testutils** | 265 | 🖥️ | `:testutils` | Test harness + Testcontainers (Redis/Postgres) helpers; container lifecycle needs live Docker. |
 
 ### Skip
 
@@ -159,34 +177,35 @@ Go idioms with no worthwhile Kotlin analog:
 
 ---
 
-## Recommended sequence
+## Sequence taken
 
-**Wave 1 — foundation & spine (both surfaces). ✅ DONE.** `errors`, `identifiers`, `random`,
-`httpclient` (keystone, ties into observability), `retry`, `circuitbreaking` — all ported. Outcome:
-a traced, resilient, correlated substrate every other package sits on. _Remaining: run the build/test
-pass to turn "written" into "verified" (see the ⚠️ note under "Where we stand")._
+The port ran foundation-first, then fanned out: **Tier 1** (spine) → **Tier 2** (core cross-surface
+services) → **Tier 3** (server platform, ported by parallel subagents in two waves — server spine +
+quick wins, then services) → **Tier 4** (domain, AI & utilities, one wave). Each tier was integrated
+and greened centrally before the next began. Outcome: a traced, resilient, correlated substrate with a
+near-1:1 Kotlin-server counterpart to `platform-go` plus the client re-orientations on Android
+(`eventstream` consume, `notifications` receive, `uploads` signed-URL).
 
-**Now the path forks by what ships first** — the two tracks are:
+## Open follow-ups
 
-- **Server track:** Tier 3 in dependency order — `database` + `errors` underpin most services, then
-  `server`/`routing`, then `messagequeue`/`distributedlock`/`email`/`search`/`capitalism`. This makes
-  `platform-kt` a real Kotlin-server counterpart to `platform-go`.
-- **Android track:** Tier 2 (`cache`, `featureflags`, `analytics`, `secrets`, `cryptography`), then the
-  client re-orientations (`eventstream` consume, `notifications` receive, `uploads` signed-URL).
+Nothing left to **port** (bar the three intentional [skips](#skip)). What remains is refinement:
 
-**Shared/AI (`llm`, `embeddings`) slot in after `httpclient`** on either track.
-
-## Things to fix regardless of sequence
-
-1. ~~**Compile & test the Tier 1 modules.**~~ — ✅ done. The whole tree (Tier 1 + Tier 2) builds,
-   tests, and lints green via `mise exec -- ./gradlew clean build`.
-2. **Reattach `:circuitbreaking`** in `cache-redis` and `featureflags-launchdarkly` (see the Tier 2
-   follow-up note) — the only unintended fidelity gaps from the parallel port.
-3. **Backfill observability tests** (`LogcatLogger`, config validation, umbrella builder) — cheapest
-   confidence you can buy in the one thing already shipped.
-3. ~~**Carry header redaction into `httpclient`**~~ — ✅ done; `:httpclient-api` redacts sensitive
-   headers before span attachment.
+1. **Backfill observability tests** — `LogcatLogger`, config `validate()`, and the umbrella builder are
+   still unpinned in the original `observability` port.
+2. **Cross-cutting seams** (documented `TODO(...)` in-code, not silent drops):
+   - **Metrics pillar** — observability-api has no metrics surface yet, so every `TODO(metrics)`
+     (circuitbreaking, cache, database, ratelimiting, capitalism, …) waits on it. Landing it also
+     extends `Observability`/`ObservabilityConfig` back toward Go's 4-pillar shape.
+   - **Additional vendor backends** — each package ships one primary backend + named seams: e.g.
+     `llm`→openai, `embeddings`→cohere/ollama, `email`→sendgrid/mailgun/mailjet/postmark/ses,
+     `database`→mysql/sqlite/r2dbc, `messagequeue`→kafka/pubsub/sqs, `uploads`→gcs/r2/b2 + S3 presigned
+     URLs, `search`→algolia/qdrant, `notifications`→apns, `server`→grpc-kotlin, `authentication`→paseto.
+   - **Android live-SDK wiring** — `featureflags`/`analytics` Android modules use the sanctioned local
+     fallback; the LaunchDarkly/Segment client SDKs need a live `Context`. `notifications-android` leaves
+     the concrete `FirebaseMessagingService` as a seam.
+   - **Wire-format divergences** (faithful abstractions, not drop-in wire replacements): `compression`'s
+     Snappy-framed stands in for Go's klauspost/s2, and `cookies` seals via AES-GCM AEAD rather than
+     gorilla/securecookie's format.
 
 > ⚠️ Package purposes are read from each Go package's own doc comment; adequacy of a port is by source
-> comparison only. Nothing in `platform-kt` has been compiled or run on this machine (no JVM/Android
-> toolchain) — Tier 1 especially needs the build/test pass above before it's trustworthy.
+> comparison against `../platform-go`, not by behavioral equivalence testing against the Go binaries.

@@ -16,6 +16,7 @@ plugins {
 dependencies {
     api(project(":cache-api"))
     api(project(":observability-api"))
+    api(project(":circuitbreaking"))
     implementation("io.lettuce:lettuce-core:6.5.1.RELEASE")
 
     testImplementation(libs.kotlin.test)

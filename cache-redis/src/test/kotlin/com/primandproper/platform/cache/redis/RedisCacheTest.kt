@@ -1,6 +1,10 @@
 package com.primandproper.platform.cache.redis
 
 import com.primandproper.platform.cache.StringCacheCodec
+import com.primandproper.platform.circuitbreaking.CircuitBreaker
+import com.primandproper.platform.circuitbreaking.CircuitState
+import com.primandproper.platform.circuitbreaking.NoopCircuitBreaker
+import com.primandproper.platform.circuitbreaking.RecordingCircuitBreaker
 import com.primandproper.platform.observability.testing.RecordingObserver
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -16,11 +20,12 @@ class RedisCacheTest {
         client: FakeRedisClient = FakeRedisClient(),
         cluster: Boolean = false,
         observer: RecordingObserver? = null,
+        breaker: CircuitBreaker = NoopCircuitBreaker,
     ): RedisCache<String> =
         if (observer != null) {
-            RedisCache(observer, client, StringCacheCodec, 1.hours, cluster)
+            RedisCache(observer, client, StringCacheCodec, 1.hours, cluster, breaker)
         } else {
-            RedisCache(client, StringCacheCodec, 1.hours, cluster)
+            RedisCache(client, StringCacheCodec, 1.hours, cluster, circuitBreaker = breaker)
         }
 
     @Test
@@ -117,5 +122,48 @@ class RedisCacheTest {
     fun `Ping succeeds`() =
         runTest {
             cache().ping()
+        }
+
+    @Test
+    fun `open circuit degrades Get to a miss and issues no command`() =
+        runTest {
+            val client = FakeRedisClient()
+            val c = cache(client, breaker = RecordingCircuitBreaker(reject = true))
+
+            // Go's cache/redis returns cache.ErrNotFound (a miss), never ErrCircuitBroken, when open.
+            assertNull(c.get("k"))
+            assertTrue(client.getCalls.isEmpty())
+        }
+
+    @Test
+    fun `open circuit makes Set a no-op that writes nothing`() =
+        runTest {
+            val client = FakeRedisClient()
+            val c = cache(client, breaker = RecordingCircuitBreaker(reject = true))
+
+            // Go's Set returns nil (no-op), never ErrCircuitBroken, when open.
+            c.set("k", "v")
+            assertNull(client.store["k"])
+        }
+
+    @Test
+    fun `transport error on Get counts as a breaker failure`() =
+        runTest {
+            val breaker = RecordingCircuitBreaker()
+            val client = FakeRedisClient(failOn = "get")
+
+            assertFailsWith<RuntimeException> { cache(client, breaker = breaker).get("k") }
+            assertEquals(1, breaker.failureCount)
+            assertEquals(CircuitState.CLOSED, breaker.state.value)
+        }
+
+    @Test
+    fun `a healthy miss counts as a breaker success, not a failure`() =
+        runTest {
+            val breaker = RecordingCircuitBreaker()
+
+            assertNull(cache(breaker = breaker).get("absent"))
+            assertEquals(1, breaker.successCount)
+            assertEquals(0, breaker.failureCount)
         }
 }

@@ -9,6 +9,7 @@ class FakeRedisClient(
     var failOn: String? = null,
 ) : RedisClient {
     val store: MutableMap<String, String> = linkedMapOf()
+    val getCalls: MutableList<String> = mutableListOf()
     val mgetCalls: MutableList<List<String>> = mutableListOf()
     val setBatchCalls: MutableList<List<String>> = mutableListOf()
 
@@ -17,6 +18,7 @@ class FakeRedisClient(
     }
 
     override suspend fun get(key: String): String? {
+        getCalls += key
         maybeFail("get")
         return store[key]
     }

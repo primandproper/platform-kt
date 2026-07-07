@@ -3,6 +3,11 @@ package com.primandproper.platform.cache.redis
 import com.primandproper.platform.cache.BatchCache
 import com.primandproper.platform.cache.CacheCodec
 import com.primandproper.platform.cache.redis.slots.slotForKey
+import com.primandproper.platform.circuitbreaking.CircuitBreaker
+import com.primandproper.platform.circuitbreaking.ErrCircuitBroken
+import com.primandproper.platform.circuitbreaking.ensureCircuitBreaker
+import com.primandproper.platform.errors.PlatformException
+import com.primandproper.platform.errors.isError
 import com.primandproper.platform.observability.Keys
 import com.primandproper.platform.observability.Logger
 import com.primandproper.platform.observability.Observer
@@ -22,10 +27,18 @@ import kotlin.time.Duration
  * by hash slot (via [slotForKey]) and each bucket is a separate round trip, while a single-node client
  * batches them all at once — matching Go's `slotGroups`.
  *
- * TODO(circuitbreaking): platform-go wraps every command with a `circuitbreaking.CircuitBreaker`
- * (short-circuiting reads to a miss and writes to a no-op while the breaker is open, and counting
- * successes/failures). That module is not part of this port's dependency set, so the breaker is a
- * documented seam — inject one here once `:circuitbreaking` is available downstream.
+ * Every command runs under the injected [circuitBreaker], mirroring platform-go's `cache/redis`. Go
+ * drives the raw `CanProceed/Succeeded/Failed` quartet by hand and, crucially, **degrades gracefully
+ * when the breaker is open** — `Get` returns a miss, `GetMany` an empty map, and `Set`/`Delete`/
+ * `SetMany` are no-ops (never `ErrCircuitBroken`), so a struggling Redis sheds load instead of
+ * cascading failures into callers. The coroutine-native breaker here is `execute`-shaped (it throws
+ * `ErrCircuitBroken` when open), so each transport call goes through [degrade]/[degradeUnit], which
+ * catch that sentinel and return the same miss/no-op Go does. A transport error inside the call still
+ * propagates and counts as a breaker failure; a healthy miss (Go's `redis.Nil`, surfaced as a `null`
+ * from [RedisClient]) returns normally and counts as a success. [ping] stays outside the breaker,
+ * matching Go's `Ping`, which never consults it. Encoding/decoding sits outside the breaker too, so a
+ * codec failure is not counted against the transport (mirroring Go, which does not `Failed()` on
+ * encode/decode errors).
  *
  * TODO(metrics): Go records hit/miss/set/delete/error counters and a latency histogram through a
  * metrics provider; there is no metrics pillar in platform-kt's observability-api yet.
@@ -36,6 +49,7 @@ public class RedisCache<T : Any> internal constructor(
     private val codec: CacheCodec<T>,
     private val expiration: Duration,
     private val isCluster: Boolean,
+    private val circuitBreaker: CircuitBreaker,
 ) : BatchCache<T> {
     /**
      * @param client the command surface; [LettuceRedisClient] in production, a fake in tests.
@@ -44,6 +58,7 @@ public class RedisCache<T : Any> internal constructor(
      * @param cluster whether the backing client is a Redis Cluster (governs slot bucketing).
      * @param logger optional root logger; defaults to noop.
      * @param tracerProvider optional tracer provider; defaults to noop tracing.
+     * @param circuitBreaker optional breaker; defaults to the always-closed noop breaker.
      */
     public constructor(
         client: RedisClient,
@@ -52,15 +67,17 @@ public class RedisCache<T : Any> internal constructor(
         cluster: Boolean = false,
         logger: Logger? = null,
         tracerProvider: TracerProvider? = null,
-    ) : this(Observer(NAME, logger, tracerProvider), client, codec, expiration, cluster)
+        circuitBreaker: CircuitBreaker? = null,
+    ) : this(Observer(NAME, logger, tracerProvider), client, codec, expiration, cluster, ensureCircuitBreaker(circuitBreaker))
 
     private val ttlMillis: Long get() = expiration.inWholeMilliseconds
 
     override suspend fun get(key: String): T? =
         o11y.span("Get") {
             set(Keys.NAME, key)
-            // A missing key is a healthy miss, not a failure: null propagates straight out.
-            val raw = client.get(key) ?: return@span null
+            // Transport under the breaker; an open breaker degrades to a miss (null), a missing key is
+            // also a healthy miss (null, not a failure). Decoding stays outside the breaker.
+            val raw = degrade<String?>(null) { client.get(key) } ?: return@span null
             codec.decode(raw)
         }
 
@@ -70,14 +87,15 @@ public class RedisCache<T : Any> internal constructor(
     ) {
         o11y.span("Set") {
             set(Keys.NAME, key)
-            client.set(key, codec.encode(value), ttlMillis)
+            val encoded = codec.encode(value)
+            degradeUnit { client.set(key, encoded, ttlMillis) }
         }
     }
 
     override suspend fun delete(key: String) {
         o11y.span("Delete") {
             set(Keys.NAME, key)
-            client.del(key)
+            degradeUnit { client.del(key) }
         }
     }
 
@@ -87,12 +105,15 @@ public class RedisCache<T : Any> internal constructor(
             if (keys.isEmpty()) {
                 return@span emptyMap()
             }
-            buildMap {
-                for (group in slotGroups(keys)) {
-                    val values = client.mget(group)
-                    group.forEachIndexed { idx, key ->
-                        val raw = values.getOrNull(idx) ?: return@forEachIndexed
-                        put(key, codec.decode(raw))
+            // An open breaker degrades to an empty result, matching Go's GetMany.
+            degrade(emptyMap<String, T>()) {
+                buildMap {
+                    for (group in slotGroups(keys)) {
+                        val values = client.mget(group)
+                        group.forEachIndexed { idx, key ->
+                            val raw = values.getOrNull(idx) ?: return@forEachIndexed
+                            put(key, codec.decode(raw))
+                        }
                     }
                 }
             }
@@ -106,8 +127,10 @@ public class RedisCache<T : Any> internal constructor(
             }
             // Encode every value first so a single bad value fails the batch before any write.
             val encoded = items.mapValues { (_, value) -> codec.encode(value) }
-            for (group in slotGroups(encoded.keys.toList())) {
-                client.setBatch(group, group.map { encoded.getValue(it) }, ttlMillis)
+            degradeUnit {
+                for (group in slotGroups(encoded.keys.toList())) {
+                    client.setBatch(group, group.map { encoded.getValue(it) }, ttlMillis)
+                }
             }
         }
     }
@@ -117,6 +140,25 @@ public class RedisCache<T : Any> internal constructor(
             client.ping()
         }
     }
+
+    /**
+     * Runs [block] under the breaker but returns [onOpen] instead of throwing when the breaker is open
+     * — the coroutine-native analog of Go's `if CannotProceed() { return <miss/empty> }`. A transport
+     * failure inside [block] still propagates (and counts as a breaker failure); only `ErrCircuitBroken`
+     * (the open-breaker rejection) is turned into graceful degradation.
+     */
+    private suspend fun <R> degrade(
+        onOpen: R,
+        block: suspend () -> R,
+    ): R =
+        try {
+            circuitBreaker.execute(block)
+        } catch (e: PlatformException) {
+            if (isError(e, ErrCircuitBroken)) onOpen else throw e
+        }
+
+    /** [degrade] for a write op: an open breaker makes the call a silent no-op, as Go's Set/Delete/SetMany do. */
+    private suspend fun degradeUnit(block: suspend () -> Unit): Unit = degrade(Unit, block)
 
     /**
      * Splits [keys] into batches safe for a single MGET/EVAL: one group for a single-node client, one

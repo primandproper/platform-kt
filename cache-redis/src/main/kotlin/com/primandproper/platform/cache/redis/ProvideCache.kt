@@ -5,6 +5,7 @@ import com.primandproper.platform.cache.CacheCodec
 import com.primandproper.platform.cache.CacheConfig
 import com.primandproper.platform.cache.CacheProvider
 import com.primandproper.platform.cache.InMemoryCache
+import com.primandproper.platform.circuitbreaking.CircuitBreaker
 import com.primandproper.platform.observability.Logger
 import com.primandproper.platform.observability.TracerProvider
 import kotlin.time.Duration.Companion.hours
@@ -23,10 +24,9 @@ import kotlin.time.Duration.Companion.hours
  * @param redisConfig required when [CacheConfig.provider] is [CacheProvider.REDIS]; ignored otherwise.
  * @param redisClient an override [RedisClient] (a fake in tests); when `null` a lazily-connecting
  *   [LettuceRedisClient] is built from [redisConfig].
- *
- * TODO(circuitbreaking): Go additionally builds a `circuitbreaking.CircuitBreaker` from the config and
- * threads it into the Redis cache. That module is outside this port's dependency set — see the seam on
- * [RedisCache].
+ * @param circuitBreaker optional breaker threaded into the Redis backend; defaults to noop. Mirrors
+ *   platform-go's `config.ProvideCache`, which builds a breaker from config and passes it to the cache.
+ *   Ignored by the in-memory provider.
  */
 public fun <T : Any> provideCache(
     config: CacheConfig,
@@ -35,6 +35,7 @@ public fun <T : Any> provideCache(
     redisClient: RedisClient? = null,
     logger: Logger? = null,
     tracerProvider: TracerProvider? = null,
+    circuitBreaker: CircuitBreaker? = null,
 ): BatchCache<T> =
     when (config.provider) {
         CacheProvider.MEMORY -> InMemoryCache(logger, tracerProvider)
@@ -51,6 +52,7 @@ public fun <T : Any> provideCache(
                 cluster = redis.clusterMode(),
                 logger = logger,
                 tracerProvider = tracerProvider,
+                circuitBreaker = circuitBreaker,
             )
         }
     }

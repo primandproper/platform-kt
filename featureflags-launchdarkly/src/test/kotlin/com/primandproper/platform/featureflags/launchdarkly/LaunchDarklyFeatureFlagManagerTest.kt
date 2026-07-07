@@ -22,7 +22,7 @@ import kotlin.test.assertTrue
  * Port of platform-go's `featureflags/launchdarkly/feature_flag_manager_test.go`. Uses the SDK's
  * offline `TestData` data source so the whole matrix (bool/string/int/float/object, plus
  * default-on-miss) exercises the real client and the platform adaptation logic without a network
- * connection. Circuit-breaker-specific cases are dropped: that subsystem is not part of this port.
+ * connection. The circuit-breaker wrap is covered separately in `LaunchDarklyBreakerTest`.
  */
 class LaunchDarklyFeatureFlagManagerTest {
     private val client: LDClient

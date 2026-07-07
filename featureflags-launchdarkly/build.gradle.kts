@@ -10,6 +10,7 @@ plugins {
 dependencies {
     api(project(":featureflags-api"))
     api(project(":observability-api"))
+    api(project(":circuitbreaking"))
 
     // LaunchDarkly Java server SDK (primary server backend).
     implementation("com.launchdarkly:launchdarkly-java-server-sdk:7.6.0")
