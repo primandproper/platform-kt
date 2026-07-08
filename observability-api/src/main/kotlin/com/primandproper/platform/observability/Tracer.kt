@@ -25,8 +25,10 @@ public interface TracerProvider {
 }
 
 /** Builds a named tracer, mirroring `tracing.NewNamedTracer`. */
-public fun namedTracer(provider: TracerProvider?, name: String): Tracer =
-    ensureTracerProvider(provider).tracer(name)
+public fun namedTracer(
+    provider: TracerProvider?,
+    name: String,
+): Tracer = ensureTracerProvider(provider).tracer(name)
 
 /** Returns [provider] if non-null, otherwise a [NoopTracerProvider]. Mirrors `EnsureTracerProvider`. */
 public fun ensureTracerProvider(provider: TracerProvider?): TracerProvider = provider ?: NoopTracerProvider
@@ -38,6 +40,8 @@ public object NoopTracer : Tracer {
 
 public object NoopTracerProvider : TracerProvider {
     override fun tracer(name: String): Tracer = NoopTracer
+
     override fun forceFlush() {}
+
     override fun shutdown() {}
 }

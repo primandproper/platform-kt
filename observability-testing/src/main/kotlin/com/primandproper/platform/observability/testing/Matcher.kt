@@ -20,21 +20,25 @@ public class Matcher internal constructor(
         return predicate(o)
     }
 
-    private fun reached(actual: Pillar, wanted: Pillar): Boolean = when (wanted) {
-        Pillar.SPAN -> actual == Pillar.BOTH || actual == Pillar.SPAN
-        Pillar.LOG -> actual == Pillar.BOTH || actual == Pillar.LOG
-        Pillar.BOTH -> actual == Pillar.BOTH
-    }
+    private fun reached(
+        actual: Pillar,
+        wanted: Pillar,
+    ): Boolean =
+        when (wanted) {
+            Pillar.SPAN -> actual == Pillar.BOTH || actual == Pillar.SPAN
+            Pillar.LOG -> actual == Pillar.BOTH || actual == Pillar.LOG
+            Pillar.BOTH -> actual == Pillar.BOTH
+        }
 }
 
 /** Matches any observation of [key], regardless of value. */
-public fun observedKey(key: String): Matcher =
-    Matcher("key=$key", null) { it.key == key }
+public fun observedKey(key: String): Matcher = Matcher("key=$key", null) { it.key == key }
 
 /** Matches an observation of [key] with exactly [value]. */
-public fun observedKeyValue(key: String, value: Any?): Matcher =
-    Matcher("key=$key value=$value", null) { it.key == key && it.value == value }
+public fun observedKeyValue(
+    key: String,
+    value: Any?,
+): Matcher = Matcher("key=$key value=$value", null) { it.key == key && it.value == value }
 
 /** Matches any observation whose value equals [value], regardless of key. */
-public fun observedValue(value: Any?): Matcher =
-    Matcher("value=$value", null) { it.value == value }
+public fun observedValue(value: Any?): Matcher = Matcher("value=$value", null) { it.value == value }

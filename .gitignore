@@ -22,3 +22,6 @@ captures/
 hs_err_pid*
 replay_pid*
 *.log
+
+# agent worktrees (live, isolated checkouts)
+.claude/worktrees/

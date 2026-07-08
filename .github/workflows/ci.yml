@@ -1,0 +1,52 @@
+# Quality gate for every PR: ktlint (lint + format), unit tests, and Android Lint — all via
+# `make check` (./gradlew check), the exact command developers run locally. A green `make check`
+# on your machine should predict a green run here.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Supersede in-progress runs for the same ref; don't waste minutes on stale commits.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: check (lint + format + test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # Matches the mise-pinned toolchain (java = "temurin-17").
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # ktlint is applied to all 73 subprojects, so Gradle must configure the 10 Android modules on
+      # every task — even ktlintCheck. That requires the Android SDK + accepted licenses.
+      # setup-android installs cmdline-tools, accepts all licenses, and exports ANDROID_HOME /
+      # ANDROID_SDK_ROOT (so no local.properties is needed).
+      - uses: android-actions/setup-android@v3
+
+      # Provision the exact SDK the build targets (compileSdk 35) rather than relying on AGP
+      # auto-download.
+      - name: Install Android SDK packages
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      # Gradle dependency / ~/.gradle caching (writes on main, PRs read) + wrapper-jar checksum
+      # validation.
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Single source of truth — the same target documented in the Makefile / README.
+      - name: make check
+        run: make check
