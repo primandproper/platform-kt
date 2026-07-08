@@ -16,13 +16,13 @@ dependencyResolutionManagement {
 
 rootProject.name = "platform-kt"
 
+// Pure Kotlin/JVM modules. These configure and build with no Android SDK, so they're what
+// server/JVM consumers depend on — and what JitPack publishes under `-PjvmOnly` (see below).
 include(
     ":observability-api",
-    ":observability-logcat",
     ":observability-otel",
     ":observability-testing",
     ":observability-koin",
-    ":observability",
     // Tier 1 — foundation & networking spine
     ":errors",
     ":identifiers",
@@ -34,19 +34,14 @@ include(
     ":httpclient-ktor",
     // Tier 2 — core cross-surface services
     ":secrets-api",
-    ":secrets-android",
     ":analytics-api",
     ":analytics-segment",
-    ":analytics-android",
     ":featureflags-api",
     ":featureflags-launchdarkly",
-    ":featureflags-android",
     ":cryptography-api",
     ":cryptography-jvm",
-    ":cryptography-android",
     ":cache-api",
     ":cache-redis",
-    ":cache-android",
     // Tier 3 — server platform (Wave A)
     ":database-api",
     ":database-exposed",
@@ -69,10 +64,8 @@ include(
     ":email-resend",
     ":uploads-api",
     ":uploads-s3",
-    ":uploads-android",
     ":eventstream-api",
     ":eventstream-ktor",
-    ":eventstream-android",
     ":search-api",
     ":search-elasticsearch",
     ":search-pgvector",
@@ -86,7 +79,6 @@ include(
     ":authentication",
     ":notifications-api",
     ":notifications-fcm",
-    ":notifications-android",
     ":qrcodes",
     ":compression",
     ":files",
@@ -96,3 +88,24 @@ include(
     ":fake",
     ":testutils",
 )
+
+// Android-library modules apply AGP, which requires the Android SDK just to *configure* — so
+// including them forces any build (local, CI, or JitPack) to have the SDK installed. Passing
+// `-PjvmOnly` skips them: JitPack builds and publishes only the JVM artifacts above, so producing
+// the server-consumable artifacts never needs Android tooling. Normal builds (no flag) include
+// everything, so `make check` and CI still cover the Android modules. No JVM module depends on any
+// of these, so their absence never breaks a JVM build.
+if (!startParameter.projectProperties.containsKey("jvmOnly")) {
+    include(
+        ":observability-logcat",
+        ":observability",
+        ":secrets-android",
+        ":analytics-android",
+        ":featureflags-android",
+        ":cryptography-android",
+        ":cache-android",
+        ":uploads-android",
+        ":eventstream-android",
+        ":notifications-android",
+    )
+}

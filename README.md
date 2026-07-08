@@ -100,6 +100,55 @@ redacted in `:httpclient-api` **before** any request/response data reaches a spa
   port).
 - **gRPC status + HTTP logger helpers** — server / `httpclient` concerns, not this module.
 
+## Using platform-kt in your project
+
+platform-kt publishes through [JitPack](https://jitpack.io) — no artifact registry to log into and
+no credentials. To cut a release, make the GitHub repo public and push a tag:
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+Then, in the consuming project, add the JitPack repository and depend on the modules you want by
+coordinate — `com.github.primandproper.platform-kt:<module>:<tag>`:
+
+```kotlin
+// settings.gradle.kts
+dependencyResolutionManagement {
+    repositories {
+        mavenCentral()
+        maven("https://jitpack.io")
+    }
+}
+
+// build.gradle.kts
+dependencies {
+    implementation("com.github.primandproper.platform-kt:cache-api:v0.1.0")
+    implementation("com.github.primandproper.platform-kt:cache-redis:v0.1.0")
+}
+```
+
+JitPack builds the tag on first request (later resolves are cached and fast). It compiles only the
+**pure-JVM** modules — the Android-library modules are excluded via `-PjvmOnly` (see `jitpack.yml`
+and the toggle in `settings.gradle.kts`) — so **a server/JVM project consumes platform-kt with no
+Android tooling on either side**, and JitPack itself never needs the Android SDK. Every JVM module
+depends only on other JVM modules, so no `.aar` is ever pulled into a server build.
+
+> Want the Android (`.aar`) modules on JitPack too? Drop `-PjvmOnly` from `jitpack.yml`; JitPack's
+> build image must then supply the Android SDK for the project's `compileSdk`.
+
+### Local iteration without a tag
+
+To try changes before tagging, publish to your Maven Local repo and consume via `mavenLocal()`:
+
+```bash
+./gradlew publishToMavenLocal            # every module, incl. Android .aar (needs the Android SDK)
+./gradlew publishToMavenLocal -PjvmOnly  # JVM modules only, no Android SDK required
+```
+
+The coordinate is the same `com.github.primandproper.platform-kt:<module>` either way, so your
+`implementation(...)` lines are identical for JitPack and Maven Local — only the repository differs.
+
 ## Building
 
 Requires **JDK 17** and the **Android SDK** (`local.properties` with `sdk.dir`, or

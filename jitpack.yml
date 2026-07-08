@@ -1,0 +1,14 @@
+# JitPack builds this repo on demand when someone requests a tagged version: it checks out the tag,
+# runs the install command below under the JDK here, and re-hosts whatever the build installs into
+# the local Maven repo — serving it as `com.github.primandproper.platform-kt:<module>:<tag>`.
+#
+# `-PjvmOnly` excludes the Android-library modules from the build (see settings.gradle.kts), so
+# JitPack only ever compiles the pure-JVM modules and never needs the Android SDK. That's what lets
+# a server/JVM project consume these artifacts without any Android tooling on either side.
+#
+# To also publish the Android (.aar) modules via JitPack, drop `-PjvmOnly` — but then JitPack's
+# build image must provide the Android SDK for the project's compileSdk.
+jdk:
+  - openjdk17
+install:
+  - ./gradlew publishToMavenLocal -PjvmOnly
