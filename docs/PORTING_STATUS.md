@@ -158,8 +158,8 @@ vendors/backends are documented `TODO(<vendor>)` seams.
 | ✅ | **embeddings** | 835 | 🌐 | `:embeddings-api` + `:embeddings-openai` | OpenAI `/v1/embeddings` over `:httpclient-api` under a CircuitBreaker · `TODO`: cohere, ollama. |
 | ✅ | **authentication** | 1194 | 🌐 | `:authentication` (argon2/tokens/totp) | Argon2id (BouncyCastle) + HS256 JWT + RFC 6238 TOTP (javax.crypto), KAT/RFC-vector tested · `TODO(paseto)`. |
 | ✅ | **notifications** | 1186 | 🌐 | `:notifications-api` + `:notifications-fcm` + `:notifications-android` | FCM HTTP v1 over `:httpclient-api` · Android receive-side payload mapping · `TODO`: apns, `FirebaseMessagingService`. |
-| ✅ | **qrcodes** | 141 | 🌐 | `:qrcodes` | ZXing PNG (otpauth URIs); pairs with authentication/totp. |
-| ✅ | **compression** | 158 | 🌐 | `:compression` | Zstd (zstd-jni) + Snappy-framed as the S2 analog (wire-incompat noted) · `TODO(s2)`. |
+| ✅ | **qrcodes** | 141 | 🖥️ | `:qrcodes` | ZXing PNG (otpauth URIs); pairs with authentication/totp. **Server-only:** the PNG writer uses ZXing's `javase` artifact (`com.google.zxing.client.j2se.MatrixToImageWriter`), which pulls `java.awt`/`javax.imageio` — absent on Android, so it throws `NoClassDefFoundError` on device. |
+| ✅ | **compression** | 158 | 🖥️ | `:compression` | Zstd (zstd-jni) + Snappy-framed as the S2 analog (wire-incompat noted) · `TODO(s2)`. **Server-only:** the plain `zstd-jni` and `snappy-java` jars ship desktop (x86-64/aarch64 macOS/Linux/Windows) JNI natives only — no Android `.so`s — so they fail to load on device. |
 | ✅ | **files** | 704 | 🌐 | `:files` | java.nio line/chunk/slice readers (Go `\n`/`\r` semantics preserved). |
 | ✅ | **numbers** | 96 | 🌐 | `:numbers` | BigDecimal round/scale/scaleToYield (NaN/Inf propagated) + range validation. |
 | ✅ | **bitmask** | 149 | 🌐 | `:bitmask` | Immutable width-typed bitmask (ULong-backed; Go's `Bitmask[T Unsigned]` → explicit width). |

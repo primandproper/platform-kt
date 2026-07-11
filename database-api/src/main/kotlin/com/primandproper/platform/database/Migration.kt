@@ -17,39 +17,30 @@ public interface Migrator {
 }
 
 /**
- * The configuration a database client needs, kept as an interface so the concrete `DatabaseConfig`
- * can provide it without the client depending on the config type — the same decoupling platform-go's
- * `database.ClientConfig` (`database/migration.go`) achieves to avoid an import cycle.
+ * The resolved configuration a database client needs to connect. Redesigned from platform-go's
+ * getter-method `database.ClientConfig` (`database/migration.go`) into an idiomatic immutable value
+ * (see P3-3): a data class of `val` properties instead of an interface of getter functions, with the
+ * zero-value fallbacks already applied by whoever builds it (see `DatabaseConfig.toClientConfig`), so
+ * a client never sees an unconfigured zero and never re-derives a default.
  *
- * The getter methods apply their own zero-value fallbacks (Go's `GetMaxPingAttempts` returns 50 when
- * unset, `GetMaxIdleConns` returns 5, and so on), so callers never see an unconfigured zero.
+ * Retry counts are [Int] (JDBC/loop counters, not Go's `int64`); delays are [kotlin.time.Duration].
+ *
+ * @property readConnectionString the read connection string, in the provider's native form.
+ * @property writeConnectionString the write connection string, in the provider's native form.
+ * @property maxPingAttempts how many times to retry a ping before declaring the database not ready.
+ * @property pingWaitPeriod how long to wait between ping attempts.
+ * @property maxIdleConns the maximum number of idle connections to keep in a pool.
+ * @property maxOpenConns the maximum number of open connections a pool may hold.
+ * @property connMaxLifetime how long a connection may be reused before being retired.
+ * @property logQueries whether raw SQL text may be recorded on database spans (default `false`: do not leak SQL).
  */
-public interface ClientConfig {
-    /** The read connection string, in the provider's native form. */
-    public fun readConnectionString(): String
-
-    /** The write connection string, in the provider's native form. */
-    public fun writeConnectionString(): String
-
-    /** How many times to retry a ping before declaring the database not ready. Defaults to 50. */
-    public fun maxPingAttempts(): Long
-
-    /** How long to wait between ping attempts. */
-    public fun pingWaitPeriod(): Duration
-
-    /** The maximum number of idle connections to keep in a pool. Defaults to 5. */
-    public fun maxIdleConns(): Int
-
-    /** The maximum number of open connections a pool may hold. Defaults to 7. */
-    public fun maxOpenConns(): Int
-
-    /** How long a connection may be reused before being retired. Defaults to 30 minutes. */
-    public fun connMaxLifetime(): Duration
-
-    /**
-     * Whether raw SQL text should be recorded on database spans. Go exposes this via an optional
-     * interface assertion consumed by the backends; it is part of the contract here so the Exposed
-     * backend can gate query-text capture the same way. Defaults to `false` (do not leak SQL).
-     */
-    public fun logQueries(): Boolean
-}
+public data class ClientConfig(
+    val readConnectionString: String,
+    val writeConnectionString: String,
+    val maxPingAttempts: Int,
+    val pingWaitPeriod: Duration,
+    val maxIdleConns: Int,
+    val maxOpenConns: Int,
+    val connMaxLifetime: Duration,
+    val logQueries: Boolean = false,
+)

@@ -16,7 +16,7 @@ import kotlin.time.Duration
  * Opens a byte range of an object, for partial reads such as HTTP Range requests (video) or seeking
  * within columnar files (parquet). Port of Go's `uploads.RangeReader`.
  */
-public interface RangeReader {
+public fun interface RangeReader {
     /**
      * Returns a reader over [length] bytes of the object at [path], starting at [offset]. A negative
      * [length] reads to the end of the object. The caller must close the reader.
@@ -31,6 +31,9 @@ public interface RangeReader {
 /**
  * Mints a signed URL granting temporary, direct access to an object, letting clients read or write
  * storage without proxying bytes through the service. Port of Go's `uploads.URLSigner`.
+ *
+ * Not a `fun interface`: its single abstract method carries a default parameter value (`options`),
+ * which Kotlin forbids on a functional interface's abstract method.
  */
 public interface UrlSigner {
     public suspend fun signedUrl(
@@ -40,7 +43,7 @@ public interface UrlSigner {
 }
 
 /** Fetches an object's stored metadata. Port of Go's `uploads.Attributer`. */
-public interface Attributer {
+public fun interface Attributer {
     public suspend fun attributes(path: String): Attributes
 }
 
@@ -50,7 +53,7 @@ public interface Attributer {
  * collected, an error terminates collection by being thrown, and the caller stops early by cancelling
  * the collector (breaking out of `collect`).
  */
-public interface Lister {
+public fun interface Lister {
     public fun list(prefix: String): Flow<ObjectInfo>
 }
 
@@ -75,12 +78,13 @@ public enum class SignedUrlMethod {
  *
  * @param method the method the URL permits; defaults to [SignedUrlMethod.GET].
  * @param contentType for PUT URLs, the exact `Content-Type` the client must send.
- * @param expiry how long the URL is valid; [Duration.ZERO] means the provider default.
+ * @param ttl how long the URL is valid; `null` (the default) means the provider default — the
+ *   Kotlin analog of Go's zero-`Duration` sentinel.
  */
 public data class SignedUrlOptions(
     val method: SignedUrlMethod = SignedUrlMethod.GET,
     val contentType: String? = null,
-    val expiry: Duration = Duration.ZERO,
+    val ttl: Duration? = null,
 )
 
 /**

@@ -44,17 +44,11 @@ public interface Logger {
     public fun clone(): Logger
 }
 
-/**
- * Returns [logger] if non-null, otherwise a [NoopLogger]. Mirrors platform-go's `EnsureLogger`, so
- * call sites never branch on nil and never panic for the want of a logger.
- */
-public fun ensureLogger(logger: Logger?): Logger = logger ?: NoopLogger
-
 /** Applies [name] to [logger], mirroring `logging.NewNamedLogger`. */
 public fun namedLogger(
-    logger: Logger?,
+    logger: Logger = NoopLogger,
     name: String,
-): Logger = ensureLogger(logger).withName(name)
+): Logger = logger.withName(name)
 
 /**
  * A logger that discards everything. Used as the safe default and in tests that don't assert on

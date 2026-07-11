@@ -18,6 +18,8 @@ android {
     compileSdk = libs.versions.compileSdk.get().toInt()
     defaultConfig { minSdk = libs.versions.minSdk.get().toInt() }
     compileOptions {
+        // opentelemetry-api (transitive via :observability-api) references java.time / java.util.function.
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -33,6 +35,7 @@ dependencies {
     implementation(libs.okhttp.client)
     implementation("com.squareup.okhttp3:okhttp-sse:4.12.0")
     implementation(libs.kotlinx.coroutines.core)
+    coreLibraryDesugaring(libs.desugar.jdk.libs)
 
     testImplementation(libs.kotlin.test)
     testImplementation(libs.kotlinx.coroutines.test)

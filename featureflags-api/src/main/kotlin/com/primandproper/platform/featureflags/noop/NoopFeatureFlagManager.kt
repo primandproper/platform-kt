@@ -8,7 +8,7 @@ import com.primandproper.platform.featureflags.FeatureFlagManager
  * boolean variant). The default a caller gets when no provider is configured. Port of
  * platform-go's `featureflags/noop`.
  */
-public class NoopFeatureFlagManager : FeatureFlagManager {
+public object NoopFeatureFlagManager : FeatureFlagManager {
     override suspend fun canUseFeature(
         feature: String,
         evalCtx: EvaluationContext,

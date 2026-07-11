@@ -1,8 +1,14 @@
 package com.primandproper.platform.authentication.tokens.config
 
+import com.primandproper.platform.authentication.tokens.TokenLifetimeExceededException
+import com.primandproper.platform.errors.isError
+import kotlinx.coroutines.test.runTest
 import java.util.Base64
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.minutes
 
 // Mirrors platform-go's base64.URLEncoding (padded), which is what real token configs carry.
 private fun validKey(byteCount: Int = 32): String = Base64.getUrlEncoder().encodeToString(ByteArray(byteCount) { it.toByte() })
@@ -41,28 +47,39 @@ class TokensConfigTest {
     }
 
     @Test
-    fun `provideTokenIssuer builds a JWT issuer`() {
-        val issuer = config().provideTokenIssuer()
+    fun `Issuer builds a JWT issuer`() {
+        val issuer = config().Issuer()
         checkNotNull(issuer)
     }
 
     @Test
-    fun `provideTokenIssuer rejects invalid base64 key`() {
-        assertFailsWith<IllegalArgumentException> { config(key = "not-valid-base64!!!").provideTokenIssuer() }
+    fun `Issuer rejects invalid base64 key`() {
+        assertFailsWith<IllegalArgumentException> { config(key = "not-valid-base64!!!").Issuer() }
     }
 
     @Test
-    fun `provideTokenIssuer rejects a wrong-length key`() {
-        assertFailsWith<IllegalArgumentException> { config(key = validKey(16)).provideTokenIssuer() }
+    fun `Issuer rejects a wrong-length key`() {
+        assertFailsWith<IllegalArgumentException> { config(key = validKey(16)).Issuer() }
     }
 
     @Test
-    fun `provideTokenIssuer rejects an unknown provider`() {
-        assertFailsWith<IllegalArgumentException> { config(provider = "some-unknown-provider").provideTokenIssuer() }
+    fun `Issuer rejects an unknown provider`() {
+        assertFailsWith<IllegalArgumentException> { config(provider = "some-unknown-provider").Issuer() }
     }
 
     @Test
-    fun `provideTokenIssuer leaves PASETO a documented seam`() {
-        assertFailsWith<IllegalArgumentException> { config(provider = PROVIDER_PASETO).provideTokenIssuer() }
+    fun `Issuer leaves PASETO a documented seam`() {
+        assertFailsWith<IllegalArgumentException> { config(provider = PROVIDER_PASETO).Issuer() }
     }
+
+    @Test
+    fun `Issuer enforces the configured lifetime ceiling`() =
+        runTest {
+            // The configured maxima are hard ceilings; the built issuer must reject an over-long request.
+            val cfg =
+                config().copy(maxAccessTokenLifetime = 15.minutes, maxRefreshTokenLifetime = 24.hours)
+            val issuer = cfg.Issuer()
+            val ex = assertFailsWith<Throwable> { issuer.issueToken("subject", 48.hours) }
+            assertTrue(isError<TokenLifetimeExceededException>(ex))
+        }
 }

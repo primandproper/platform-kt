@@ -8,6 +8,8 @@ import com.primandproper.platform.cache.BatchCache
 import com.primandproper.platform.cache.CacheCodec
 import com.primandproper.platform.observability.Keys
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.Observer
 import com.primandproper.platform.observability.TracerProvider
 import com.primandproper.platform.observability.span
@@ -42,8 +44,8 @@ public class DataStoreCache<T : Any>(
     private val codec: CacheCodec<T>,
     private val ttl: Duration,
     private val clock: () -> Long = System::currentTimeMillis,
-    logger: Logger? = null,
-    tracerProvider: TracerProvider? = null,
+    logger: Logger = NoopLogger,
+    tracerProvider: TracerProvider = NoopTracerProvider,
 ) : BatchCache<T> {
     private val o11y: Observer = Observer(NAME, logger, tracerProvider)
 

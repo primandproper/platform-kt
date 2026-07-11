@@ -15,6 +15,8 @@ android {
     compileSdk = libs.versions.compileSdk.get().toInt()
     defaultConfig { minSdk = libs.versions.minSdk.get().toInt() }
     compileOptions {
+        // opentelemetry-api (transitive via :observability-api) references java.time / java.util.function.
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -28,6 +30,7 @@ kotlin {
 dependencies {
     api(project(":cache-api"))
     implementation("androidx.datastore:datastore-preferences:1.1.1")
+    coreLibraryDesugaring(libs.desugar.jdk.libs)
 
     testImplementation(libs.kotlin.test)
     testImplementation(libs.kotlinx.coroutines.test)

@@ -1,30 +1,42 @@
 package com.primandproper.platform.authentication.tokens
 
 import com.primandproper.platform.errors.PlatformException
-import com.primandproper.platform.errors.newError
 import java.time.Instant
 
+/*
+ * Token error types. In platform-go these are `var Err… = errors.New(…)` sentinels matched via
+ * errors.Is; here they are exception CLASSES thrown fresh at each site and matched by type.
+ */
+
 /**
- * Indicates a caller passed a registered-claim key in `extraClaims`. Reserved claim keys
+ * Thrown when a caller passed a registered-claim key in `extraClaims`. Reserved claim keys
  * (`iss`, `sub`, `aud`, `exp`, `nbf`, `iat`, `jti`) are owned by the issuer and cannot be overridden
  * by callers. Port of platform-go's `tokens.ErrReservedClaim`.
  */
-public val ErrReservedClaim: PlatformException = newError("reserved claim key in extraClaims")
+public class ReservedClaimException : PlatformException("reserved claim key in extraClaims")
 
 /**
- * Sentinel returned by [Issuer.parseToken] implementations when a token decodes and authenticates but
- * fails claim validation. Port of platform-go's `tokens.ErrTokenExpired`.
+ * Thrown by [Issuer.parseToken] implementations when a token decodes and authenticates but fails claim
+ * validation because it has expired. Port of platform-go's `tokens.ErrTokenExpired`.
  */
-public val ErrTokenExpired: PlatformException = newError("token is expired")
+public class TokenExpiredException : PlatformException("token is expired")
 
-/** The token's `nbf` claim is in the future. Port of platform-go's `tokens.ErrTokenNotYetValid`. */
-public val ErrTokenNotYetValid: PlatformException = newError("token is not yet valid")
+/** Thrown when the token's `nbf` claim is in the future. Port of platform-go's `tokens.ErrTokenNotYetValid`. */
+public class TokenNotYetValidException : PlatformException("token is not yet valid")
 
-/** The token's `aud` claim does not match the issuer's audience. Port of `tokens.ErrInvalidAudience`. */
-public val ErrInvalidAudience: PlatformException = newError("token audience is not valid")
+/**
+ * Thrown by [Issuer.issueToken] when the requested lifetime exceeds the issuer's configured ceiling
+ * (`TokensConfig.maxAccessTokenLifetime` / `maxRefreshTokenLifetime`). The ceilings are hard maxima,
+ * so an over-long request is rejected rather than silently clamped — a caller must not be able to
+ * mint an arbitrarily long-lived token.
+ */
+public class TokenLifetimeExceededException : PlatformException("requested token lifetime exceeds the configured maximum")
 
-/** The token's `iss` claim does not match the issuer. Port of `tokens.ErrInvalidIssuer`. */
-public val ErrInvalidIssuer: PlatformException = newError("token issuer is not valid")
+/** Thrown when the token's `aud` claim does not match the issuer's audience. Port of `tokens.ErrInvalidAudience`. */
+public class InvalidAudienceException : PlatformException("token audience is not valid")
+
+/** Thrown when the token's `iss` claim does not match the issuer. Port of `tokens.ErrInvalidIssuer`. */
+public class InvalidIssuerException : PlatformException("token issuer is not valid")
 
 /**
  * The set of JWT registered claim names (RFC 7519) the issuer owns. Callers MUST NOT include these in
@@ -34,11 +46,11 @@ public val ReservedClaimKeys: Set<String> = setOf("iss", "sub", "aud", "exp", "n
 
 /**
  * The parsed claim set from a token. Implementations expose issuer-owned registered claims via typed
- * accessors ([subject], [jti], [expiresAt]) and any application-specific claims via [get] / [getString].
- * Port of platform-go's `tokens.Claims`.
+ * accessors ([subject], [jti], [expiresAt]) and any application-specific claims via [get] /
+ * [getStringOrNull]. Port of platform-go's `tokens.Claims`.
  *
  * Callers that need claims not surfaced by the typed accessors look them up by name, e.g.
- * `claims.getString("account_id")`.
+ * `claims.getStringOrNull("account_id")`.
  */
 public interface Claims {
     /** The `sub` claim, or the empty string if unset. */
@@ -50,14 +62,11 @@ public interface Claims {
     /** The `exp` claim as a UTC instant, or `null` if unset. Mirrors Go's zero-`time.Time`. */
     public fun expiresAt(): Instant?
 
-    /** The raw value for [key], or `null` if absent. The Boolean reports presence. */
-    public fun get(key: String): Pair<Any?, Boolean>
+    /** The raw value for [key], or `null` if the claim is absent. */
+    public operator fun get(key: String): Any?
 
-    /**
-     * The string value for [key]. The Boolean reports whether the key was present AND a string;
-     * missing keys and non-string values both return `("", false)`.
-     */
-    public fun getString(key: String): Pair<String, Boolean>
+    /** The string value for [key], or `null` if the claim is absent or is not a string. */
+    public fun getStringOrNull(key: String): String?
 }
 
 /**
@@ -70,7 +79,7 @@ public interface Issuer {
     /**
      * Issues a token for [subject] valid for [expiry], carrying [extraClaims]. Returns the encoded
      * token string and the generated `jti`. Passing a reserved-claim key in [extraClaims] throws
-     * [ErrReservedClaim].
+     * [ReservedClaimException].
      */
     public suspend fun issueToken(
         subject: String,

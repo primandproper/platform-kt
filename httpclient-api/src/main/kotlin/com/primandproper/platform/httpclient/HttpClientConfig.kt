@@ -16,51 +16,46 @@ public const val DEFAULT_MAX_IDLE_CONNS_PER_HOST: Int = 100
 /**
  * Configures a backend HTTP client. Port of platform-go's `httpclient.Config`, with two Kotlin-native
  * additions: [connectTimeout] (Go folds this into the dialer timeout) and the [retryHook] seam.
- * [ensureDefaults] is `EnsureDefaults`; [validate] is `ValidateWithContext` — reporting
- * misconfiguration by throwing rather than returning an error, exactly as `ObservabilityConfig`.
  *
- * Build one fluently with the `HttpClientConfig { }` DSL.
+ * Immutable: defaults are supplied by the constructor's default arguments (with the timeouts using a
+ * `null` sentinel resolved on read by [timeout]/[connectTimeout], since `connectTimeout` falls back to
+ * the resolved `timeout`), and the config is validated at construction in [init] rather than in a
+ * separate `EnsureDefaults`/`ValidateWithContext` phase.
+ *
+ * Build one with named arguments: `HttpClientConfig(timeout = 5.seconds)`.
+ *
+ * @param timeout whole-call timeout; `null` (the default) resolves to [DEFAULT_TIMEOUT].
+ * @param connectTimeout connection-establishment timeout; `null` (the default) resolves to [timeout].
+ * @param enableTracing whether the backend installs its OpenTelemetry instrumentation so calls join
+ *   the trace and inject `traceparent`. `null` (the default) means "auto": the client factories enable
+ *   tracing when a real (non-noop) `OpenTelemetry` is supplied, and leave it off for the noop default.
+ *   Set it explicitly to force tracing on or off regardless of the supplied `OpenTelemetry`.
+ * @param retryHook optional retry seam. `null` (the default) means one attempt, no retries. The real
+ *   backoff/jitter policy is the separately-ported `retry` package — wire an implementation in here
+ *   rather than baking a policy into the client. See [executeWithRetries].
  */
-public class HttpClientConfig {
-    /** Whole-call timeout. Zero means "apply [DEFAULT_TIMEOUT] in [ensureDefaults]". */
-    public var timeout: Duration = Duration.ZERO
-
-    /** Connection-establishment timeout. Zero defaults to [timeout] in [ensureDefaults]. */
-    public var connectTimeout: Duration = Duration.ZERO
-
-    public var maxIdleConns: Int = 0
-    public var maxIdleConnsPerHost: Int = 0
-
-    /** When true, the backend installs its OpenTelemetry instrumentation so calls join the trace. */
-    public var enableTracing: Boolean = false
-
-    /**
-     * Optional retry seam. Null (the default) means one attempt, no retries. The real backoff/jitter
-     * policy is the separately-ported `retry` package — wire an implementation in here rather than
-     * baking a policy into the client. See [executeWithRetries].
-     */
-    public var retryHook: RetryHook? = null
-
-    /** Sets default values for zero fields, mirroring `EnsureDefaults`. */
-    public fun ensureDefaults() {
-        if (timeout == Duration.ZERO) timeout = DEFAULT_TIMEOUT
-        if (connectTimeout == Duration.ZERO) connectTimeout = timeout
-        if (maxIdleConns == 0) maxIdleConns = DEFAULT_MAX_IDLE_CONNS
-        if (maxIdleConnsPerHost == 0) maxIdleConnsPerHost = DEFAULT_MAX_IDLE_CONNS_PER_HOST
-    }
-
-    /** Validates the config, throwing [IllegalArgumentException] on the first problem. */
-    public fun validate() {
-        require(timeout >= 1.milliseconds) { "httpclient: timeout must be at least 1ms, was $timeout" }
-        require(connectTimeout >= 1.milliseconds) {
-            "httpclient: connectTimeout must be at least 1ms, was $connectTimeout"
+public data class HttpClientConfig(
+    val timeout: Duration? = null,
+    val connectTimeout: Duration? = null,
+    val maxIdleConns: Int = DEFAULT_MAX_IDLE_CONNS,
+    val maxIdleConnsPerHost: Int = DEFAULT_MAX_IDLE_CONNS_PER_HOST,
+    val enableTracing: Boolean? = null,
+    val retryHook: RetryHook? = null,
+) {
+    init {
+        timeout?.let { require(it >= 1.milliseconds) { "httpclient: timeout must be at least 1ms, was $it" } }
+        connectTimeout?.let {
+            require(it >= 1.milliseconds) { "httpclient: connectTimeout must be at least 1ms, was $it" }
         }
         require(maxIdleConns >= 1) { "httpclient: maxIdleConns must be at least 1, was $maxIdleConns" }
         require(maxIdleConnsPerHost >= 1) {
             "httpclient: maxIdleConnsPerHost must be at least 1, was $maxIdleConnsPerHost"
         }
     }
-}
 
-/** DSL entry point, mirroring `Observability { }` / `Observer(...)` factory style. */
-public fun HttpClientConfig(block: HttpClientConfig.() -> Unit): HttpClientConfig = HttpClientConfig().apply(block)
+    /** The whole-call timeout, or [DEFAULT_TIMEOUT] when unset. */
+    public fun timeout(): Duration = timeout ?: DEFAULT_TIMEOUT
+
+    /** The connection-establishment timeout, or the resolved [timeout] when unset. */
+    public fun connectTimeout(): Duration = connectTimeout ?: timeout()
+}

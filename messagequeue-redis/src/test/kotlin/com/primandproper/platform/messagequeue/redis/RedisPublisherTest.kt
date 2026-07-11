@@ -1,11 +1,11 @@
 package com.primandproper.platform.messagequeue.redis
 
-import com.primandproper.platform.circuitbreaking.ErrCircuitBroken
+import com.primandproper.platform.circuitbreaking.CircuitBrokenException
 import com.primandproper.platform.circuitbreaking.NoopCircuitBreaker
 import com.primandproper.platform.circuitbreaking.RecordingCircuitBreaker
 import com.primandproper.platform.messagequeue.EmptyTopicNameException
 import com.primandproper.platform.messagequeue.MessageEncoder
-import com.primandproper.platform.messagequeue.RawMessageEncoder
+import com.primandproper.platform.messagequeue.StringMessageEncoder
 import com.primandproper.platform.observability.testing.RecordingObserver
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -19,7 +19,7 @@ class RedisPublisherTest {
     private fun publisher(
         client: RedisPubSubClient = FakeRedisPubSubClient(),
         observer: RecordingObserver = RecordingObserver(),
-        encoder: MessageEncoder = RawMessageEncoder,
+        encoder: MessageEncoder<String> = StringMessageEncoder,
         breaker: com.primandproper.platform.circuitbreaking.CircuitBreaker = NoopCircuitBreaker,
         topic: String = "topic",
     ) = RedisPublisher(observer, client, encoder, topic, breaker)
@@ -47,7 +47,7 @@ class RedisPublisherTest {
         runTest {
             val client = FakeRedisPubSubClient()
             val obs = RecordingObserver()
-            val failing = MessageEncoder { throw RuntimeException("boom") }
+            val failing = MessageEncoder<String> { throw RuntimeException("boom") }
 
             assertFailsWith<RuntimeException> { publisher(client = client, observer = obs, encoder = failing).publish("x") }
 
@@ -61,7 +61,7 @@ class RedisPublisherTest {
     fun `PublishAsync swallows the error instead of throwing`() =
         runTest {
             val client = FakeRedisPubSubClient()
-            val failing = MessageEncoder { throw RuntimeException("boom") }
+            val failing = MessageEncoder<String> { throw RuntimeException("boom") }
             publisher(client = client, encoder = failing).publishAsync("x")
             assertTrue(client.published.isEmpty())
         }
@@ -74,20 +74,20 @@ class RedisPublisherTest {
 
             val error = assertFailsWith<Throwable> { publisher(client = client, breaker = breaker).publish("x") }
 
-            assertSame(ErrCircuitBroken, error)
+            assertTrue(error is CircuitBrokenException)
             assertTrue(client.published.isEmpty())
             assertEquals(1, breaker.rejectionCount)
         }
 
     @Test
-    fun `Stop does not close the shared client used by other topics`() =
+    fun `close does not close the shared client used by other topics`() =
         runTest {
             val client = FakeRedisPubSubClient()
-            val provider = provideRedisPublisherProvider(config(), client = client)
+            val provider = redisPublisherProvider(config(), StringMessageEncoder, client = client)
 
-            val pub1 = provider.providePublisher("topic-1")
-            val pub2 = provider.providePublisher("topic-2")
-            pub1.stop()
+            val pub1 = provider.publisher("topic-1")
+            val pub2 = provider.publisher("topic-2")
+            pub1.close()
 
             pub2.publish("still works")
             assertEquals(1, client.published.size)
@@ -97,16 +97,16 @@ class RedisPublisherTest {
     @Test
     fun `the provider rejects an empty topic`() =
         runTest {
-            val provider = provideRedisPublisherProvider(config(), client = FakeRedisPubSubClient())
-            assertFailsWith<EmptyTopicNameException> { provider.providePublisher("") }
+            val provider = redisPublisherProvider(config(), StringMessageEncoder, client = FakeRedisPubSubClient())
+            assertFailsWith<EmptyTopicNameException> { provider.publisher("") }
         }
 
     @Test
     fun `the provider caches one publisher per topic`() =
         runTest {
-            val provider = provideRedisPublisherProvider(config(), client = FakeRedisPubSubClient())
-            val first = provider.providePublisher("t")
-            val second = provider.providePublisher("t")
+            val provider = redisPublisherProvider(config(), StringMessageEncoder, client = FakeRedisPubSubClient())
+            val first = provider.publisher("t")
+            val second = provider.publisher("t")
             assertSame(first, second)
         }
 
@@ -114,7 +114,7 @@ class RedisPublisherTest {
     fun `the provider pings and closes the shared client`() =
         runTest {
             val client = FakeRedisPubSubClient()
-            val provider = provideRedisPublisherProvider(config(), client = client)
+            val provider = redisPublisherProvider(config(), StringMessageEncoder, client = client)
             provider.ping()
             provider.close()
             assertEquals(1, client.pingCount)

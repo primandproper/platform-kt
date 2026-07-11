@@ -1,5 +1,6 @@
 package com.primandproper.platform.eventstream
 
+import com.primandproper.platform.observability.SuspendCloseable
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 
@@ -20,15 +21,19 @@ import kotlinx.coroutines.flow.Flow
  * WebSocket; the CLIENT (`:eventstream-android`) never implements it — it *consumes* the same events
  * as a `Flow<Event>`, the mirror image of this contract.
  */
-public interface EventStream {
+public interface EventStream : SuspendCloseable {
     /** Pushes [event] to the client. Throws if the stream is already closed or the write fails. */
     public suspend fun send(event: Event)
 
     /** Completes when the stream terminates (client disconnect or [close]). Await it with `done.join()`. */
     public val done: Job
 
-    /** Terminates the stream and completes [done]. Idempotent, mirroring Go's `sync.Once`-guarded `Close`. */
-    public suspend fun close()
+    /**
+     * Terminates the stream and completes [done]. Idempotent, mirroring Go's `sync.Once`-guarded
+     * `Close`. Shares the platform-wide [SuspendCloseable] closer type (P3-12), so a stream can be
+     * bracketed with `use { }`.
+     */
+    override suspend fun close()
 }
 
 /**

@@ -1,7 +1,7 @@
 package com.primandproper.platform.cookies
 
 import com.primandproper.platform.cryptography.encryption.EncryptorDecryptor
-import com.primandproper.platform.cryptography.encryption.aes.newAesEncryptorDecryptor
+import com.primandproper.platform.cryptography.encryption.aes.aesEncryptorDecryptor
 import com.primandproper.platform.observability.Keys
 import com.primandproper.platform.observability.Observer
 import com.primandproper.platform.observability.noopObserver
@@ -111,7 +111,7 @@ internal fun buildCookieManager(
     // key length is accepted (SHA-256 always yields the required 32 bytes), the way gorilla accepts
     // flexible key sizes. The sealer is given a noop observer: only the manager instruments.
     val sealKey = deriveSealKey(hashKey, blockKey)
-    val sealer = newAesEncryptorDecryptor(sealKey, noopObserver(SEALER_NAME))
+    val sealer = aesEncryptorDecryptor(sealKey, noopObserver(SEALER_NAME))
 
     return DefaultCookieManager(
         sealer = sealer,

@@ -39,6 +39,30 @@ class Argon2AuthenticatorTest {
         }
 
     @Test
+    fun `rejects a hash whose memory parameter exceeds the cap`() =
+        runTest {
+            val authenticator = newArgon2Authenticator()
+            // A crafted hash asking for ~2 TiB of memory must be rejected before any derivation runs,
+            // rather than handed to BouncyCastle where it would exhaust the host.
+            val hostileHash =
+                "\$argon2id\$v=19\$m=2000000000,t=1,p=2\$C+YWiNi21e94acF3ip8UGA\$Ru6oL96HZSP7cVcfAbRwOuK9+vwBo/BLhCzOrGrMH0M"
+            assertFailsWith<IllegalArgumentException> {
+                authenticator.passwordMatches(hostileHash, EXAMPLE_PASSWORD)
+            }
+        }
+
+    @Test
+    fun `rejects a hash whose iterations parameter exceeds the cap`() =
+        runTest {
+            val authenticator = newArgon2Authenticator()
+            val hostileHash =
+                "\$argon2id\$v=19\$m=65536,t=1000000,p=2\$C+YWiNi21e94acF3ip8UGA\$Ru6oL96HZSP7cVcfAbRwOuK9+vwBo/BLhCzOrGrMH0M"
+            assertFailsWith<IllegalArgumentException> {
+                authenticator.passwordMatches(hostileHash, EXAMPLE_PASSWORD)
+            }
+        }
+
+    @Test
     fun `hash then verify round-trips`() =
         runTest {
             val authenticator = newArgon2Authenticator()

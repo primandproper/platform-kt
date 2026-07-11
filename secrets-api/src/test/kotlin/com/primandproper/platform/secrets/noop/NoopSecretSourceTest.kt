@@ -1,19 +1,22 @@
 package com.primandproper.platform.secrets.noop
 
+import com.primandproper.platform.secrets.SecretNotFoundException
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
-/** Port of `secrets/noop/noop_test.go`. */
 class NoopSecretSourceTest {
     @Test
-    fun `getSecret returns empty string`() =
+    fun `getSecret throws SecretNotFoundException carrying the key`() =
         runTest {
-            assertEquals("", NoopSecretSource.getSecret("any-key"))
+            val e = assertFailsWith<SecretNotFoundException> { NoopSecretSource.getSecret("any-key") }
+            assertEquals("any-key", e.key)
         }
 
     @Test
-    fun `close is a no-op`() {
-        NoopSecretSource.close()
-    }
+    fun `close is a no-op`() =
+        runTest {
+            NoopSecretSource.close()
+        }
 }

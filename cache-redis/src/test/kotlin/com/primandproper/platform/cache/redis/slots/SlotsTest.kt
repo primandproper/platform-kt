@@ -8,11 +8,12 @@ import kotlin.test.assertTrue
 /** Port of platform-go's `cache/redis/slots/crc16_test.go`. */
 class SlotsTest {
     // A deliberately naive bit-by-bit CRC16-CCITT (XMODEM), an independent oracle for the table-driven
-    // implementation. Mirrors Go's `crc16Reference`.
-    private fun crc16Reference(s: String): Int {
+    // implementation. Mirrors Go's `crc16Reference`. Hashes the raw UTF-8 bytes, matching how Redis (and
+    // `slot`) treat the key, so non-ASCII inputs agree.
+    private fun crc16Reference(bytes: ByteArray): Int {
         var crc = 0
-        for (ch in s) {
-            crc = crc xor ((ch.code and 0xff) shl 8)
+        for (b in bytes) {
+            crc = crc xor ((b.toInt() and 0xff) shl 8)
             repeat(8) {
                 crc =
                     if (crc and 0x8000 != 0) {
@@ -51,8 +52,18 @@ class SlotsTest {
         repeat(1000) {
             val len = 1 + rng.nextInt(32)
             val s = String(CharArray(len) { rng.nextInt(256).toChar() })
-            assertEquals(crc16Reference(s) % SLOT_COUNT, slot(s), "input: $s")
+            assertEquals(crc16Reference(s.encodeToByteArray()) % SLOT_COUNT, slot(s), "input: $s")
         }
+    }
+
+    @Test
+    fun `non-ASCII keys hash over their UTF-8 bytes`() {
+        // A UTF-16 `Char.code and 0xff` hash would disagree with Redis for any multi-byte code point;
+        // the slot must be CRC16 over the UTF-8 encoding.
+        val key = "café☕"
+        assertEquals(crc16Reference(key.encodeToByteArray()) % SLOT_COUNT, slot(key))
+        // The hashtag body is likewise extracted and hashed as UTF-8 bytes.
+        assertEquals(slot("café"), slotForKey("{café}.tag"))
     }
 
     @Test

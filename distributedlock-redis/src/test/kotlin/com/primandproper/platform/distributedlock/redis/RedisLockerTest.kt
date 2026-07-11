@@ -1,14 +1,14 @@
 package com.primandproper.platform.distributedlock.redis
 
 import com.primandproper.platform.circuitbreaking.CircuitBreaker
+import com.primandproper.platform.circuitbreaking.CircuitBrokenException
 import com.primandproper.platform.circuitbreaking.CircuitState
-import com.primandproper.platform.circuitbreaking.ErrCircuitBroken
 import com.primandproper.platform.circuitbreaking.NoopCircuitBreaker
 import com.primandproper.platform.circuitbreaking.RecordingCircuitBreaker
-import com.primandproper.platform.distributedlock.ErrEmptyKey
-import com.primandproper.platform.distributedlock.ErrInvalidTTL
-import com.primandproper.platform.distributedlock.ErrLockNotAcquired
-import com.primandproper.platform.distributedlock.ErrLockNotHeld
+import com.primandproper.platform.distributedlock.EmptyKeyException
+import com.primandproper.platform.distributedlock.InvalidTtlException
+import com.primandproper.platform.distributedlock.LockNotAcquiredException
+import com.primandproper.platform.distributedlock.LockNotHeldException
 import com.primandproper.platform.errors.PlatformException
 import com.primandproper.platform.errors.isError
 import com.primandproper.platform.observability.Observer
@@ -24,6 +24,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.nanoseconds
 
 /** Port of the unit tests in platform-go's `distributedlock/redis/redis_test.go`, against a fake client. */
 class RedisLockerTest {
@@ -36,7 +37,7 @@ class RedisLockerTest {
 
         override suspend fun <T> execute(block: suspend () -> T): T {
             calls++
-            if (calls > proceedFor) throw ErrCircuitBroken
+            if (calls > proceedFor) throw CircuitBrokenException()
             return block()
         }
     }
@@ -79,27 +80,60 @@ class RedisLockerTest {
 
             val op = obs.operations.last { it.name == "Acquire" }
             assertTrue(op.errors.isEmpty())
+            assertEquals("acquired", op.values["lock.outcome"])
+        }
+
+    @Test
+    fun `Acquire records a contended outcome without failing the breaker`() =
+        runTest {
+            val obs = RecordingObserver()
+            val cb = RecordingCircuitBreaker()
+            val fc = FakeRedisLockClient(setNxResult = false)
+            assertFailsWith<LockNotAcquiredException> { locker(fc, cb, obs).acquire("k", 1.minutes) }
+            val op = obs.operations.last { it.name == "Acquire" }
+            assertEquals("contended", op.values["lock.outcome"])
+            assertEquals(1, cb.successCount)
+        }
+
+    @Test
+    fun `Acquire rejects a sub-millisecond TTL`() =
+        runTest {
+            val fc = FakeRedisLockClient(setNxResult = true)
+            val e = assertFailsWith<PlatformException> { locker(fc).acquire("k", 1.nanoseconds) }
+            assertTrue(isError<InvalidTtlException>(e))
+            assertEquals(0, fc.setNxCalls) // rejected before any backend call — never a permanent lock
+        }
+
+    @Test
+    fun `Refresh rejects a sub-millisecond TTL`() =
+        runTest {
+            val fc = FakeRedisLockClient(setNxResult = true, evalResult = 1)
+            val h = locker(fc).acquire("k", 1.minutes)
+            val e = assertFailsWith<PlatformException> { h.refresh(1.nanoseconds) }
+            assertTrue(isError<InvalidTtlException>(e))
+            assertEquals(1.minutes, h.ttl)
+            assertEquals(0, fc.evalCalls) // never issues a PEXPIRE key 0 that would silently delete the lock
         }
 
     @Test
     fun `Acquire rejects empty key`() =
         runTest {
             val e = assertFailsWith<PlatformException> { locker(FakeRedisLockClient()).acquire("", 1.minutes) }
-            assertTrue(isError(e, ErrEmptyKey))
+            assertTrue(isError<EmptyKeyException>(e))
         }
 
     @Test
     fun `Acquire rejects zero TTL`() =
         runTest {
             val e = assertFailsWith<PlatformException> { locker(FakeRedisLockClient()).acquire("k", Duration.ZERO) }
-            assertTrue(isError(e, ErrInvalidTTL))
+            assertTrue(isError<InvalidTtlException>(e))
         }
 
     @Test
     fun `Acquire rejects negative TTL`() =
         runTest {
             val e = assertFailsWith<PlatformException> { locker(FakeRedisLockClient()).acquire("k", -(1.minutes)) }
-            assertTrue(isError(e, ErrInvalidTTL))
+            assertTrue(isError<InvalidTtlException>(e))
         }
 
     @Test
@@ -107,7 +141,7 @@ class RedisLockerTest {
         runTest {
             val cb = RecordingCircuitBreaker(reject = true)
             val e = assertFailsWith<PlatformException> { locker(FakeRedisLockClient(), cb).acquire("k", 1.minutes) }
-            assertTrue(isError(e, ErrCircuitBroken))
+            assertTrue(isError<CircuitBrokenException>(e))
             assertEquals(1, cb.rejectionCount)
         }
 
@@ -131,7 +165,7 @@ class RedisLockerTest {
             val cb = RecordingCircuitBreaker()
             val fc = FakeRedisLockClient(setNxResult = false)
             val e = assertFailsWith<PlatformException> { locker(fc, cb).acquire("k", 1.minutes) }
-            assertTrue(isError(e, ErrLockNotAcquired))
+            assertTrue(isError<LockNotAcquiredException>(e))
             assertEquals(1, cb.successCount)
             assertEquals(0, cb.failureCount)
         }
@@ -154,7 +188,7 @@ class RedisLockerTest {
             val fc = FakeRedisLockClient(setNxResult = true, evalResult = 0)
             val h = locker(fc).acquire("k", 1.minutes)
             val e = assertFailsWith<PlatformException> { h.release() }
-            assertTrue(isError(e, ErrLockNotHeld))
+            assertTrue(isError<LockNotHeldException>(e))
         }
 
     @Test
@@ -178,7 +212,7 @@ class RedisLockerTest {
             val fc = FakeRedisLockClient(setNxResult = true)
             val h = locker(fc, cb).acquire("k", 1.minutes)
             val e = assertFailsWith<PlatformException> { h.release() }
-            assertTrue(isError(e, ErrCircuitBroken))
+            assertTrue(isError<CircuitBrokenException>(e))
             assertEquals(2, cb.calls)
         }
 
@@ -200,7 +234,7 @@ class RedisLockerTest {
             val fc = FakeRedisLockClient(setNxResult = true)
             val h = locker(fc).acquire("k", 1.minutes)
             val e = assertFailsWith<PlatformException> { h.refresh(Duration.ZERO) }
-            assertTrue(isError(e, ErrInvalidTTL))
+            assertTrue(isError<InvalidTtlException>(e))
             assertEquals(1.minutes, h.ttl)
         }
 
@@ -210,7 +244,7 @@ class RedisLockerTest {
             val fc = FakeRedisLockClient(setNxResult = true, evalResult = 0)
             val h = locker(fc).acquire("k", 1.minutes)
             val e = assertFailsWith<PlatformException> { h.refresh(2.minutes) }
-            assertTrue(isError(e, ErrLockNotHeld))
+            assertTrue(isError<LockNotHeldException>(e))
             assertEquals(1.minutes, h.ttl)
         }
 
@@ -235,7 +269,7 @@ class RedisLockerTest {
             val fc = FakeRedisLockClient(setNxResult = true)
             val h = locker(fc, cb).acquire("k", 1.minutes)
             val e = assertFailsWith<PlatformException> { h.refresh(1.minutes) }
-            assertTrue(isError(e, ErrCircuitBroken))
+            assertTrue(isError<CircuitBrokenException>(e))
             assertEquals(2, cb.calls)
         }
 
@@ -244,9 +278,11 @@ class RedisLockerTest {
     @Test
     fun `Ping success and error`() =
         runTest {
+            val obs = RecordingObserver()
             val fc = FakeRedisLockClient()
-            locker(fc).ping()
+            locker(fc, obs = obs).ping()
             assertEquals(1, fc.pingCalls)
+            assertTrue(obs.operations.any { it.name == "Ping" }) // ping runs under its own span
 
             val bad = FakeRedisLockClient(pingErr = RuntimeException("ping boom"))
             assertFailsWith<RuntimeException> { locker(bad).ping() }

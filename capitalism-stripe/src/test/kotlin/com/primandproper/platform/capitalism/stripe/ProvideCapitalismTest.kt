@@ -12,15 +12,15 @@ import kotlin.test.assertTrue
 class ProvideCapitalismTest {
     @Test
     fun `disabled config returns a noop manager`() {
-        val pm = provideCapitalismImplementation(CapitalismConfig(enabled = false))
+        val pm = PaymentManager(CapitalismConfig(enabled = false))
         assertTrue(pm is NoopPaymentManager)
     }
 
     @Test
     fun `stripe provider returns a stripe manager`() {
         val pm =
-            provideCapitalismImplementation(
-                CapitalismConfig(enabled = true, provider = PaymentProvider.STRIPE.value),
+            PaymentManager(
+                CapitalismConfig(enabled = true, provider = PaymentProvider.STRIPE),
                 stripeConfig = StripeConfig(webhookSecret = "whsec"),
             )
         assertTrue(pm is StripePaymentManager)
@@ -29,14 +29,14 @@ class ProvideCapitalismTest {
     @Test
     fun `stripe provider without a stripe config throws`() {
         assertFailsWith<IllegalArgumentException> {
-            provideCapitalismImplementation(CapitalismConfig(enabled = true, provider = PaymentProvider.STRIPE.value))
+            PaymentManager(CapitalismConfig(enabled = true, provider = PaymentProvider.STRIPE))
         }
     }
 
     @Test
-    fun `unknown provider throws`() {
+    fun `an enabled config with no provider throws`() {
         assertFailsWith<PlatformException> {
-            provideCapitalismImplementation(CapitalismConfig(enabled = true, provider = "paypal"))
+            PaymentManager(CapitalismConfig(enabled = true, provider = null))
         }
     }
 }

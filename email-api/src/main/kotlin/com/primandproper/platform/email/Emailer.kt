@@ -8,7 +8,7 @@ package com.primandproper.platform.email
  * idiomatic Kotlin shape. Backends live in sibling modules (`:email-resend`); the noop and mock
  * doubles ship here.
  */
-public interface Emailer {
+public fun interface Emailer {
     /** Sends the email described by [details], throwing on failure. */
     public suspend fun sendEmail(details: OutboundEmailMessage)
 }

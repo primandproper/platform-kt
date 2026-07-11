@@ -1,6 +1,8 @@
 package com.primandproper.platform.qrcodes
 
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.TracerProvider
 
 /** The default QR-code PNG size (width and height in pixels), matching platform-go's hard-coded `barcode.Scale(256, 256)`. */
@@ -20,7 +22,7 @@ public data class QrCodeConfig(
 ) {
     /** Builds the production ZXing-backed [QrCodeBuilder] from this config. */
     public fun newBuilder(
-        logger: Logger? = null,
-        tracerProvider: TracerProvider? = null,
+        logger: Logger = NoopLogger,
+        tracerProvider: TracerProvider = NoopTracerProvider,
     ): QrCodeBuilder = DefaultQrCodeBuilder(issuer, size, logger, tracerProvider)
 }

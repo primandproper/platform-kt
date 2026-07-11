@@ -262,5 +262,33 @@ class CookieManagerTest {
         assertEquals("s=v; Path=/; HttpOnly; SameSite=Lax", header)
     }
 
+    @Test
+    fun `serialize zero-pads a single-digit day in the Expires date`() {
+        // The 5th must render as "05", not "5" — RFC_1123_DATE_TIME's variable-width day trips strict
+        // RFC 7231 (IMF-fixdate) parsers on the 1st through 9th.
+        val cookie =
+            Cookie(name = "s", value = "v", expires = Instant.parse("2026-03-05T08:07:06Z"))
+        val header = cookie.serialize()
+        assertTrue(
+            header.contains("Expires=Thu, 05 Mar 2026 08:07:06 GMT"),
+            "expected a zero-padded IMF-fixdate, got: $header",
+        )
+    }
+
+    @Test
+    fun `serialize omits Max-Age when it is zero matching Go`() {
+        // Go's http.Cookie treats MaxAge == 0 as "unset" and omits the attribute; only a negative
+        // value emits Max-Age=0 to delete the cookie now.
+        val header = Cookie(name = "s", value = "v", maxAge = 0).serialize()
+        assertTrue(!header.contains("Max-Age"), "Max-Age=0 must be omitted, got: $header")
+        assertEquals("s=v; Path=/; HttpOnly; SameSite=Lax", header)
+    }
+
+    @Test
+    fun `serialize emits Max-Age=0 for a negative max age to delete now`() {
+        val header = Cookie(name = "s", value = "v", maxAge = -1).serialize()
+        assertTrue(header.contains("; Max-Age=0"), "a negative max age must delete now, got: $header")
+    }
+
     private fun noop() = RecordingObserver()
 }

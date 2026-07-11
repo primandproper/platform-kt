@@ -9,43 +9,29 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class ErrorsTest {
-    // --- sentinels (mirrors TestSentinelErrors) ---
+    // --- error types (mirrors TestSentinelErrors) ---
 
     @Test
-    fun errNilInputParameter() {
-        assertNotNull(ErrNilInputParameter)
-        assertContains(ErrNilInputParameter.message!!, "nil")
+    fun emptyInputParameter() {
+        assertContains(EmptyInputParameterException().message!!, "empty")
     }
 
     @Test
-    fun errEmptyInputParameter() {
-        assertNotNull(ErrEmptyInputParameter)
-        assertContains(ErrEmptyInputParameter.message!!, "empty")
+    fun invalidIDProvided() {
+        assertContains(InvalidIDProvidedException().message!!, "ID")
     }
 
     @Test
-    fun errNilInputProvided() {
-        assertNotNull(ErrNilInputProvided)
-        assertContains(ErrNilInputProvided.message!!, "nil input")
+    fun emptyInputProvided() {
+        assertContains(EmptyInputProvidedException().message!!, "empty")
     }
 
     @Test
-    fun errInvalidIDProvided() {
-        assertNotNull(ErrInvalidIDProvided)
-        assertContains(ErrInvalidIDProvided.message!!, "ID")
-    }
-
-    @Test
-    fun errEmptyInputProvided() {
-        assertNotNull(ErrEmptyInputProvided)
-        assertContains(ErrEmptyInputProvided.message!!, "empty")
-    }
-
-    @Test
-    fun sentinelsAreDistinct() {
-        assertFalse(isError(ErrNilInputParameter, ErrEmptyInputParameter))
-        assertFalse(isError(ErrNilInputProvided, ErrInvalidIDProvided))
-        assertFalse(isError(ErrEmptyInputProvided, ErrNilInputProvided))
+    fun typesAreDistinct() {
+        // Each error type is matched by class, so a value of one type is never matched as another.
+        assertTrue(isError<EmptyInputParameterException>(EmptyInputParameterException()))
+        assertFalse(isError<EmptyInputParameterException>(InvalidIDProvidedException()))
+        assertFalse(isError<EmptyInputProvidedException>(InvalidIDProvidedException()))
     }
 
     // --- constructors (mirrors TestNew / TestNewf / TestErrorf) ---
@@ -57,16 +43,10 @@ class ErrorsTest {
     }
 
     @Test
-    fun newfCreatesFormattedError() {
-        val err = newErrorf("error %d: %s", 42, "details")
+    fun newWithTemplateCreatesFormattedError() {
+        val err = newError("error ${42}: ${"details"}")
         assertContains(err.message!!, "42")
         assertContains(err.message!!, "details")
-    }
-
-    @Test
-    fun errorfCreatesFormattedError() {
-        val err = newErrorf("something %s", "failed")
-        assertContains(err.message!!, "something failed")
     }
 
     // --- wrapping (mirrors TestWrap / TestWrapf) ---
@@ -75,21 +55,14 @@ class ErrorsTest {
     fun wrapWrapsErrorWithMessage() {
         val inner = newError("inner")
         val wrapped = wrap(inner, "outer")
-        assertNotNull(wrapped)
         assertTrue(isError(wrapped, inner))
         assertContains(wrapped.message!!, "outer")
     }
 
     @Test
-    fun wrapNilReturnsNull() {
-        assertNull(wrap(null, "outer"))
-    }
-
-    @Test
-    fun wrapfWrapsErrorWithFormattedMessage() {
+    fun wrapWithTemplateWrapsErrorWithFormattedMessage() {
         val inner = newError("inner")
-        val wrapped = wrapf(inner, "outer %d", 1)
-        assertNotNull(wrapped)
+        val wrapped = wrap(inner, "outer ${1}")
         assertTrue(isError(wrapped, inner))
         assertContains(wrapped.message!!, "outer 1")
     }
@@ -98,23 +71,26 @@ class ErrorsTest {
 
     @Test
     fun asErrorFindsTypedCauseInChain() {
-        val wrapped = wrap(ErrNilInputParameter, "context")
+        val cause = EmptyInputParameterException()
+        val wrapped = wrap(cause, "context")
         assertNotNull(asError<PlatformException>(wrapped))
-        assertTrue(isError(wrapped, ErrNilInputParameter))
+        assertTrue(isError<EmptyInputParameterException>(wrapped))
+        assertTrue(isError(wrapped, cause))
     }
 
     @Test
     fun joinErrorsMatchesAnyMember() {
-        val joined = joinErrors(ErrNilInputParameter, ErrEmptyInputParameter)
+        val joined = joinErrors(EmptyInputParameterException(), InvalidIDProvidedException())
         assertNotNull(joined)
-        assertTrue(isError(joined, ErrNilInputParameter))
-        assertTrue(isError(joined, ErrEmptyInputParameter))
-        assertFalse(isError(joined, ErrInvalidIDProvided))
+        assertTrue(isError<EmptyInputParameterException>(joined))
+        assertTrue(isError<InvalidIDProvidedException>(joined))
+        assertFalse(isError<EmptyInputProvidedException>(joined))
     }
 
     @Test
     fun joinErrorsDropsNullsAndCollapses() {
         assertNull(joinErrors(null, null))
-        assertEquals(ErrNilInputParameter, joinErrors(null, ErrNilInputParameter))
+        val only = newError("only")
+        assertEquals(only, joinErrors(null, only))
     }
 }

@@ -1,6 +1,6 @@
 package com.primandproper.platform.eventstream
 
-import com.primandproper.platform.errors.newErrorf
+import com.primandproper.platform.errors.newError
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
@@ -36,8 +36,9 @@ public enum class EventStreamProvider(
  * WebSocket-specific configuration. Port of platform-go's `eventstream/websocket.Config`.
  *
  * @param allowedOrigins exact `Origin` header values permitted to upgrade. When empty, the transport
- *   falls back to the framework's same-origin policy, matching Go's `originChecker` returning `nil`
- *   (gorilla's default) for an empty allowlist.
+ *   enforces gorilla's default same-origin policy (see [isOriginAllowed]) — a cross-origin request is
+ *   rejected. This is a deliberate secure default: unlike Go, Ktor's WebSockets plugin performs no
+ *   Origin validation of its own, so an empty allowlist must not mean "allow everything".
  * @param heartbeatInterval how often to ping an idle connection; `Duration.ZERO` disables the
  *   heartbeat. Defaults to 30s, matching Go's `defaultHeartbeatInterval`.
  * @param readBufferSize / [writeBufferSize] frame buffer sizes; `0` means "use the transport
@@ -50,15 +51,28 @@ public data class WebSocketConfig(
     val writeBufferSize: Int = 0,
 ) {
     /**
-     * Whether a request bearing [origin] may upgrade. Port of Go's `originChecker`: an empty
-     * [allowedOrigins] permits everything (the framework's same-origin default applies), an empty or
-     * absent `Origin` header is treated as an originless non-browser client and allowed, and
-     * otherwise the exact value must be in the allowlist.
+     * Whether a request whose `Origin` header is [origin] and whose `Host` header is [host] may
+     * upgrade. Port of Go's gorilla-backed `originChecker`:
+     *
+     * - An absent or blank `Origin` is an originless (non-browser) client and is allowed, matching
+     *   gorilla's `checkSameOrigin` returning `true` for a missing `Origin`. Browsers always send an
+     *   `Origin` on cross-site requests, so this cannot be spoofed away by a malicious page.
+     * - With a non-empty [allowedOrigins], the exact `Origin` value must appear in the allowlist.
+     * - With an empty [allowedOrigins], gorilla's default same-origin policy applies: the `Origin`
+     *   authority (`scheme://host[:port]`) must equal the request [host] (`host[:port]`), compared
+     *   case-insensitively. A cross-origin or unparseable `Origin` is rejected. This replaces the
+     *   previous "empty allowlist allows everything" behavior, which — because Ktor's WebSockets
+     *   plugin performs no Origin validation of its own — left endpoints open to Cross-Site WebSocket
+     *   Hijacking.
      */
-    public fun isOriginAllowed(origin: String?): Boolean {
-        if (allowedOrigins.isEmpty()) return true
-        if (origin.isNullOrEmpty()) return true
-        return origin in allowedOrigins
+    public fun isOriginAllowed(
+        origin: String?,
+        host: String?,
+    ): Boolean {
+        if (origin.isNullOrBlank()) return true
+        if (allowedOrigins.isNotEmpty()) return origin in allowedOrigins
+        val originHost = originAuthority(origin) ?: return false
+        return !host.isNullOrBlank() && originHost.equals(host, ignoreCase = true)
     }
 
     public companion object {
@@ -68,6 +82,20 @@ public data class WebSocketConfig(
         /** Go's `defaultBufferSize`. */
         public const val DEFAULT_BUFFER_SIZE: Int = 1024
     }
+}
+
+/**
+ * Extracts the `host[:port]` authority from an `Origin` header value (`scheme://host[:port]`), or
+ * `null` when it carries no scheme separator (and so cannot be parsed) — mirroring the `Host` field
+ * of gorilla's `url.Parse(origin)`. Comparison against the request `Host` is left to the caller.
+ */
+private fun originAuthority(origin: String): String? {
+    val schemeEnd = origin.indexOf("://")
+    if (schemeEnd < 0) return null
+    val rest = origin.substring(schemeEnd + 3)
+    val end = rest.indexOfFirst { it == '/' || it == '?' || it == '#' }
+    val authority = if (end < 0) rest else rest.substring(0, end)
+    return authority.ifEmpty { null }
 }
 
 /**
@@ -92,7 +120,7 @@ public data class EventStreamConfig(
      */
     public fun resolveProvider(): EventStreamProvider {
         if (provider == EventStreamProvider.WEBSOCKET && webSocket == null) {
-            throw newErrorf("websocket provider requires websocket configuration")
+            throw newError("websocket provider requires websocket configuration")
         }
         return provider
     }

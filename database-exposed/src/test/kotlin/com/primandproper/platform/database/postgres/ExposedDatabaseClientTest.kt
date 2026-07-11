@@ -1,17 +1,18 @@
 package com.primandproper.platform.database.postgres
 
 import com.primandproper.platform.database.Migrator
+import com.primandproper.platform.database.Row
 import com.primandproper.platform.database.SqlQueryExecutorAndTransactionManager
 import com.primandproper.platform.database.SqlResult
 import com.primandproper.platform.database.config.ConnectionDetails
 import com.primandproper.platform.database.config.DatabaseConfig
-import com.primandproper.platform.database.config.DatabaseProviders
+import com.primandproper.platform.database.config.DatabaseProvider
 import com.primandproper.platform.errors.PlatformException
 import com.primandproper.platform.observability.testing.RecordingObserver
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.test.runTest
 import org.h2.jdbcx.JdbcDataSource
 import org.postgresql.ds.PGSimpleDataSource
-import java.sql.PreparedStatement
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicInteger
 import javax.sql.DataSource
@@ -45,7 +46,7 @@ class ExposedDatabaseClientTest {
     fun `isReady returns true for a reachable database`() =
         runTest {
             val ds = h2()
-            val client = ExposedDatabaseClient(ds, ds, maxPingAttempts = 3L, pingWaitPeriod = 1.seconds)
+            val client = ExposedDatabaseClient(ds, ds, maxPingAttempts = 3, pingWaitPeriod = 1.seconds)
             assertTrue(client.isReady())
         }
 
@@ -75,7 +76,7 @@ class ExposedDatabaseClientTest {
         runTest {
             val obs = RecordingObserver()
             val ds = h2()
-            val client = ExposedDatabaseClient(ds, ds, 3L, 1.seconds, obs) { Instant.now() }
+            val client = ExposedDatabaseClient(ds, ds, 3, 1.seconds, obs) { Instant.now() }
             val tx = FakeTransaction()
 
             client.rollbackTransaction(tx)
@@ -91,7 +92,7 @@ class ExposedDatabaseClientTest {
         runTest {
             val obs = RecordingObserver()
             val ds = h2()
-            val client = ExposedDatabaseClient(ds, ds, 3L, 1.seconds, obs) { Instant.now() }
+            val client = ExposedDatabaseClient(ds, ds, 3, 1.seconds, obs) { Instant.now() }
 
             client.rollbackTransaction(FakeTransaction(failOnRollback = true))
 
@@ -107,58 +108,57 @@ class ExposedDatabaseClientTest {
     }
 
     @Test
-    fun `provideDatabaseClient builds a lazily-connecting postgres client`() {
+    fun `postgresDatabaseClient builds a lazily-connecting postgres client`() {
         val config =
             DatabaseConfig(
-                provider = DatabaseProviders.POSTGRES,
+                provider = DatabaseProvider.POSTGRES,
                 readConnection = postgresConnection,
                 writeConnection = postgresConnection,
             )
-        val client = provideDatabaseClient(config)
+        val client = postgresDatabaseClient(config)
         assertNotNull(client.readDataSource)
         assertTrue(client.readDataSource is PGSimpleDataSource)
     }
 
     @Test
-    fun `provideDatabaseClient throws when no connection is configured`() {
+    fun `postgresDatabaseClient throws when no connection is configured`() {
         assertFailsWith<PlatformException> {
-            provideDatabaseClient(DatabaseConfig(provider = DatabaseProviders.POSTGRES))
+            postgresDatabaseClient(DatabaseConfig(provider = DatabaseProvider.POSTGRES))
         }
     }
 
     @Test
-    fun `provideDatabase rejects an invalid provider`() =
-        runTest {
-            val e =
-                assertFailsWith<PlatformException> {
-                    provideDatabase(DatabaseConfig(provider = "invalid_provider"))
-                }
-            assertTrue(e.message!!.contains("invalid database provider"))
-        }
+    fun `providerFromValue rejects an invalid provider at the parse edge`() {
+        val e =
+            assertFailsWith<PlatformException> {
+                DatabaseConfig.providerFromValue("invalid_provider")
+            }
+        assertTrue(e.message!!.contains("unknown database provider"))
+    }
 
     @Test
-    fun `provideDatabase reports mysql and sqlite as named seams`() =
+    fun `DatabaseClient reports mysql and sqlite as named seams`() =
         runTest {
             assertFailsWith<PlatformException> {
-                provideDatabase(DatabaseConfig(provider = DatabaseProviders.MYSQL, readConnection = postgresConnection))
+                DatabaseClient(DatabaseConfig(provider = DatabaseProvider.MYSQL, readConnection = postgresConnection))
             }
             val sqlite =
-                DatabaseConfig(provider = DatabaseProviders.SQLITE, readConnection = ConnectionDetails(database = "/tmp/x.db"))
-            assertFailsWith<PlatformException> { provideDatabase(sqlite) }
+                DatabaseConfig(provider = DatabaseProvider.SQLITE, readConnection = ConnectionDetails(database = "/tmp/x.db"))
+            assertFailsWith<PlatformException> { DatabaseClient(sqlite) }
         }
 
     @Test
-    fun `provideDatabase runs migrations when enabled`() =
+    fun `DatabaseClient runs migrations when enabled`() =
         runTest {
             val config =
                 DatabaseConfig(
-                    provider = DatabaseProviders.POSTGRES,
+                    provider = DatabaseProvider.POSTGRES,
                     runMigrations = true,
                     readConnection = postgresConnection,
                     writeConnection = postgresConnection,
                 )
             val migrator = FakeMigrator()
-            provideDatabase(config, migrator)
+            DatabaseClient(config, migrator)
             assertTrue(migrator.called)
         }
 
@@ -186,16 +186,19 @@ class ExposedDatabaseClientTest {
             vararg args: Any?,
         ): SqlResult = throw UnsupportedOperationException()
 
-        override suspend fun prepare(query: String): PreparedStatement = throw UnsupportedOperationException()
-
-        override suspend fun query(
+        override fun query(
             query: String,
             vararg args: Any?,
-        ) = throw UnsupportedOperationException()
+        ): Flow<Row> = throw UnsupportedOperationException()
 
-        override suspend fun queryRow(
+        override suspend fun queryOne(
             query: String,
             vararg args: Any?,
-        ) = throw UnsupportedOperationException()
+        ): Row = throw UnsupportedOperationException()
+
+        override suspend fun <T> withPrepared(
+            sql: String,
+            block: suspend (com.primandproper.platform.database.PreparedHandle) -> T,
+        ): T = throw UnsupportedOperationException()
     }
 }

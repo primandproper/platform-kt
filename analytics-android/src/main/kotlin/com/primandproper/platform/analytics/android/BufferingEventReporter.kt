@@ -3,6 +3,8 @@ package com.primandproper.platform.analytics.android
 import com.primandproper.platform.analytics.EventReporter
 import com.primandproper.platform.observability.Keys
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.Observer
 import com.primandproper.platform.observability.TracerProvider
 import com.primandproper.platform.observability.span
@@ -32,16 +34,26 @@ public sealed interface BufferedEvent {
 
 /**
  * An on-device [EventReporter] that buffers events in memory rather than delivering them to a vendor
- * — the local Android backend that stands in for the Segment Analytics-Kotlin SDK (see the module's
- * `TODO(segment-android)`).
+ * — the local Android backend, and an offline / pre-write-key stand-in for the network-backed
+ * [SegmentEventReporter] (both implement the same interface, so callers swap without changing code).
  *
  * The buffer is bounded ([capacity]) and thread-safe: when full, the oldest event is dropped so a
  * burst can never exhaust memory. Every public operation opens an Observer span recording the
  * user/event/length, matching how the other reporters instrument. Once [close]d, further events are
  * ignored.
  *
- * A consumer flushes the buffer with [drain] (e.g. from a `WorkManager` job) and forwards the events
- * to the real transport, or inspects it non-destructively with [snapshot].
+ * ## The buffer is in-memory and process-local — NOT durable
+ * Events live only in this instance's heap. There is no disk persistence: if the process is killed
+ * (backgrounded and reclaimed, crash, reboot) before a consumer [drain]s and forwards them, the
+ * buffered events are lost. A consumer flushes the buffer with [drain] and forwards the events to the
+ * real transport, or inspects it non-destructively with [snapshot]; scheduling that drain (e.g. from a
+ * `WorkManager` job) does not by itself make the events survive process death.
+ *
+ * TODO(persist-buffer): back the buffer with durable storage so events outlive the process. Intended
+ * shape: persist each captured [BufferedEvent] to Jetpack DataStore (or a Room table) on
+ * [record] instead of (or alongside) the in-memory deque, and run a `WorkManager` `CoroutineWorker`
+ * that reads the persisted rows, forwards them to the real transport, and deletes the drained rows on
+ * success. Only then does the "flush from a WorkManager job" story actually survive process death.
  */
 public class BufferingEventReporter internal constructor(
     private val o11y: Observer,
@@ -54,15 +66,15 @@ public class BufferingEventReporter internal constructor(
      */
     public constructor(
         capacity: Int = DEFAULT_BUFFER_CAPACITY,
-        logger: Logger? = null,
-        tracerProvider: TracerProvider? = null,
+        logger: Logger = NoopLogger,
+        tracerProvider: TracerProvider = NoopTracerProvider,
     ) : this(Observer(NAME, logger, tracerProvider), capacity)
 
     private val lock = Any()
     private val buffer = ArrayDeque<BufferedEvent>()
     private var closed = false
 
-    override fun close() {
+    override suspend fun close() {
         synchronized(lock) {
             buffer.clear()
             closed = true

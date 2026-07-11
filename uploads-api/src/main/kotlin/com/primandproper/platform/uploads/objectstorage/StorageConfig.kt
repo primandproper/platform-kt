@@ -2,11 +2,8 @@ package com.primandproper.platform.uploads.objectstorage
 
 import com.primandproper.platform.errors.PlatformException
 
-/** Denotes that the provided configuration is `null`/absent. Port of Go's `objectstorage.ErrNilConfig`. */
-public val ErrNilConfig: PlatformException = PlatformException("nil config provided")
-
-/** Denotes that the configured provider is not recognized. Port of Go's `objectstorage.ErrUnknownProvider`. */
-public val ErrUnknownProvider: PlatformException = PlatformException("unknown storage provider")
+/** Thrown when the configured provider is not recognized. Port of Go's `objectstorage.ErrUnknownProvider`. */
+public class UnknownProviderException : PlatformException("unknown storage provider")
 
 /** Thrown when a [StorageConfig] fails validation. Carries the same messages Go's ozzo-validation produces. */
 public class StorageConfigException(
@@ -25,15 +22,16 @@ public const val DEFAULT_DIRECTORY_MODE: Int = 0x1C0 // 0o700
  * Configures a filesystem-based provider. Port of Go's `objectstorage.FilesystemConfig`.
  *
  * @param rootDirectory the directory objects are stored under; required.
- * @param directoryMode the POSIX permission bits for directories the backend creates; defaults to
- *   [DEFAULT_DIRECTORY_MODE] when non-positive.
+ * @param directoryMode the POSIX permission bits for directories the backend creates; `null` (the
+ *   default) or a non-positive value resolves to [DEFAULT_DIRECTORY_MODE] — `null` being the Kotlin
+ *   analog of Go's zero-value sentinel.
  */
 public data class FilesystemConfig(
     val rootDirectory: String,
-    val directoryMode: Int = DEFAULT_DIRECTORY_MODE,
+    val directoryMode: Int? = null,
 ) {
     /** Returns the configured directory mode, or the `0o700` default. Port of Go's `directoryMode()`. */
-    public fun resolvedDirectoryMode(): Int = if (directoryMode <= 0) DEFAULT_DIRECTORY_MODE else directoryMode
+    public fun resolvedDirectoryMode(): Int = directoryMode?.takeIf { it > 0 } ?: DEFAULT_DIRECTORY_MODE
 
     /** Validates the config, throwing when [rootDirectory] is blank. */
     public fun validate() {
@@ -78,46 +76,39 @@ public data class BackblazeB2Config(
 /**
  * Configures an object-storage [Uploader]. Port of platform-go's `objectstorage.Config`.
  *
- * [validate] canonicalizes [provider] (trim + lowercase, via [StorageProvider.fromValue]) so validation,
- * the conditional sub-config rules, and backend dispatch all agree — mirroring Go's `ValidateWithContext`
- * rewriting `c.Provider` before validating. The conditional rules match Go exactly: the filesystem/R2/B2
- * sub-config is required when its provider is selected and must be `null` otherwise.
+ * [provider] is a typed [StorageProvider], resolved from its string form once at the parse edge
+ * ([StorageProvider.fromValue]); validation, the conditional sub-config rules, and backend dispatch all
+ * consume the typed value, so the "unreachable null arm" a string field forced is gone. The conditional
+ * rules match Go exactly: the filesystem/R2/B2 sub-config is required when its provider is selected and
+ * must be `null` otherwise.
  *
  * The circuit-breaker settings on Go's `Config` are omitted — `:circuitbreaking` is outside this port's
  * dependency set (see the `TODO(circuitbreaking)` seam on [Uploader]).
  *
  * @param bucketName the bucket/container name; required.
- * @param provider the provider name; validated against [StorageProvider].
+ * @param provider the selected [StorageProvider].
  * @param bucketPrefix an optional key prefix applied to every path (Go's `blob.PrefixedBucket`).
  */
 public data class StorageConfig(
     val bucketName: String,
-    val provider: String,
+    val provider: StorageProvider,
     val bucketPrefix: String = "",
     val filesystemConfig: FilesystemConfig? = null,
     val r2Config: R2Config? = null,
     val backblazeB2Config: BackblazeB2Config? = null,
 ) {
-    /** The canonicalized (trimmed, lowercased) provider, or `null` when unrecognized. */
-    public fun resolvedProvider(): StorageProvider? = StorageProvider.fromValue(provider)
-
     /**
      * Validates the config, mirroring Go's `Config.ValidateWithContext`:
      * - [bucketName] is required;
-     * - [provider] must name a known provider;
      * - the matching sub-config is required for filesystem/R2/B2, and must be `null` for any other
      *   provider (Go's `validation.When(...).Else(validation.Nil)`).
      */
     public fun validate() {
         if (bucketName.isBlank()) throw StorageConfigException("bucketName: cannot be blank")
 
-        val resolved =
-            resolvedProvider()
-                ?: throw StorageConfigException("provider: must be a valid value")
-
-        requireSubConfig(resolved == StorageProvider.FILESYSTEM, filesystemConfig, "filesystemConfig")
-        requireSubConfig(resolved == StorageProvider.R2, r2Config, "r2Config")
-        requireSubConfig(resolved == StorageProvider.BACKBLAZE_B2, backblazeB2Config, "backblazeB2Config")
+        requireSubConfig(provider == StorageProvider.FILESYSTEM, filesystemConfig, "filesystemConfig")
+        requireSubConfig(provider == StorageProvider.R2, r2Config, "r2Config")
+        requireSubConfig(provider == StorageProvider.BACKBLAZE_B2, backblazeB2Config, "backblazeB2Config")
 
         filesystemConfig?.validate()
         r2Config?.validate()

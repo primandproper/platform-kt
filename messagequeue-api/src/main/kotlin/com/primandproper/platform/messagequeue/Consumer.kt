@@ -1,5 +1,8 @@
 package com.primandproper.platform.messagequeue
 
+import com.primandproper.platform.observability.SuspendCloseable
+import kotlinx.coroutines.flow.Flow
+
 /**
  * Handles a consumed message's raw payload. Port of platform-go's `messagequeue.ConsumerFunc`
  * (`func(context.Context, []byte) error`): Go threads a context and returns an error; this port
@@ -12,7 +15,7 @@ public fun interface ConsumerHandler {
 }
 
 /**
- * Consumes messages from a queue, applying the handler supplied at [ConsumerProvider.provideConsumer]
+ * Consumes messages from a queue, applying the handler supplied at [ConsumerProvider.consumer]
  * time to each payload. Port of platform-go's `messagequeue.Consumer`.
  *
  * Go's `Consume(ctx, stopChan, errors)` blocks in a loop until the context is cancelled or a value is
@@ -28,22 +31,35 @@ public interface Consumer {
      * `launch { consumer.consume() }`) to stop and release the subscription.
      */
     public suspend fun consume()
+
+    /**
+     * A `Flow`-based alternative to [consume]: a **cold** flow of raw message payloads for this
+     * consumer's topic. Each collection subscribes; cancelling or completing the collector releases the
+     * underlying subscription (Go's `defer subscription.Close()`). Unlike [consume] — which binds a
+     * [ConsumerHandler] at [ConsumerProvider.consumer] time and runs it under the consumer's
+     * span/circuit-breaker machinery — [messages] hands the raw stream back so the caller composes
+     * delivery with the coroutine operators they prefer (`onEach`, `map`, `buffer`, …).
+     */
+    public fun messages(): Flow<ByteArray>
 }
 
 /**
  * Provides a [Consumer] for a given topic, caching one per topic. Port of platform-go's
  * `messagequeue.ConsumerProvider`.
  */
-public interface ConsumerProvider {
-    /** Releases the provider's resources — the shared client. */
-    public fun close()
+public interface ConsumerProvider : SuspendCloseable {
+    /**
+     * Releases the provider's resources — the shared client. `suspend` via [SuspendCloseable] because
+     * closing the shared client is transport teardown.
+     */
+    override suspend fun close()
 
     /**
      * Returns a [Consumer] for [topic] that drives [handler] over each message, throwing
      * [EmptyTopicNameException] when [topic] is blank. Repeated calls for the same topic return the
      * same cached instance.
      */
-    public suspend fun provideConsumer(
+    public suspend fun consumer(
         topic: String,
         handler: ConsumerHandler,
     ): Consumer

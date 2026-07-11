@@ -1,5 +1,7 @@
 package com.primandproper.platform.notifications.async
 
+import com.primandproper.platform.observability.SuspendCloseable
+
 /**
  * An async notification event published to a named channel. Port of platform-go's `async.Event`.
  *
@@ -20,13 +22,16 @@ public data class AsyncEvent(
  * transport, and leaves the networked backends as documented seams. Go's `Publish`/`Close` thread a
  * `context.Context` and return an `error`; this port suspends instead and throws on failure.
  */
-public interface AsyncNotifier {
+public interface AsyncNotifier : SuspendCloseable {
     /** Sends [event] to every subscriber of [channel], throwing on failure. */
     public suspend fun publish(
         channel: String,
         event: AsyncEvent,
     )
 
-    /** Releases resources held by the notifier. Idempotent. */
-    public fun close()
+    /**
+     * Releases resources held by the notifier. Idempotent. `suspend` via [SuspendCloseable] because
+     * the networked backends (WebSocket/SSE/Pusher/Ably) tear down a real transport.
+     */
+    override suspend fun close()
 }

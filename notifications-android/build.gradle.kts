@@ -11,14 +11,15 @@ plugins {
 // that turns an incoming FCM push into that model and dispatches it — all unit-tested on the JVM,
 // including malformed payloads.
 //
-// TODO(fcm-android): the concrete `FirebaseMessagingService` subclass that Android instantiates on a
-// delivered push is a documented seam, NOT implemented here. Pulling `com.google.firebase:firebase-messaging`
-// requires a google-services.json + the Google Services Gradle plugin and an instrumented runtime, which
-// won't build/run in this JVM-only setup. The service subclass is a thin adapter: its
-// `onMessageReceived(RemoteMessage)` copies the RemoteMessage fields into a `RawPushPayload` and calls
-// `PushMessageDispatcher.dispatch`; its `onNewToken(String)` calls `dispatchToken`. All the testable
-// logic lives here behind that seam, exactly as `:analytics-android` keeps the Segment-Kotlin SDK behind
-// its buffering reporter.
+// The concrete `FirebaseMessagingService` subclass Android instantiates on a delivered push is
+// `PlatformFirebaseMessagingService`. It is a thin adapter: `onMessageReceived(RemoteMessage)` copies
+// the RemoteMessage fields into a `RawPushPayload` and calls `PushMessageDispatcher.dispatch`;
+// `onNewToken(String)` calls `dispatchToken`. All the mapping/dispatch logic lives behind that seam
+// in JVM-unit-tested code (`PushMessageDispatcher`/`PushPayloadMapper`); only the service class touches
+// a `com.google.firebase` type. The `firebase-messaging` AAR compiles and merges its manifest without
+// google-services.json; a consuming app supplies its own `google-services.json` + Google Services
+// Gradle plugin and registers a `PushMessageHandler` via `PlatformFirebaseMessaging.handler` (or by
+// having its `Application` implement `PushMessageHandlerProvider`).
 android {
     namespace = "com.primandproper.platform.notifications.android"
     compileSdk = libs.versions.compileSdk.get().toInt()
@@ -47,6 +48,12 @@ kotlin {
 
 dependencies {
     api(project(":notifications-api"))
+
+    // The receive-side FCM SDK. `implementation`, not `api`: only PlatformFirebaseMessagingService
+    // touches a com.google.firebase type — callers interact through PushMessageHandler / the payload
+    // model, which stay Firebase-free so the dispatch logic is JVM-unit-testable.
+    implementation(libs.firebase.messaging)
+
     coreLibraryDesugaring(libs.desugar.jdk.libs)
 
     testImplementation(libs.kotlin.test)

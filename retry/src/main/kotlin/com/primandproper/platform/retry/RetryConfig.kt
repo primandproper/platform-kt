@@ -10,59 +10,32 @@ internal val DEFAULT_MAX_DELAY: Duration = 5.seconds
 internal const val DEFAULT_MULTIPLIER: Double = 2.0
 
 /**
- * Configures retry behavior — the analog of platform-go's `retry.Config`. Built with the mutable
- * `{ }` block idiom used across this port (see `ObservabilityConfig`) rather than ozzo-validation's
- * struct tags, since there is no env/JSON loader on Android to target.
+ * Configures retry behavior — the analog of platform-go's `retry.Config`. An immutable data class
+ * built with named arguments (`RetryConfig(maxAttempts = 5)`) rather than ozzo-validation's struct
+ * tags, since there is no env/JSON loader on Android to target: defaults come from the constructor's
+ * default arguments and the config is validated at construction in [init] (the analog of
+ * `Config.ValidateWithContext`), so an invalid policy fails loudly at build time rather than being
+ * silently clamped.
  *
  * [retryIf] extends platform-go's model: Go marks a single error non-retryable by wrapping it with
  * `Unretryable`; this adds an optional blanket predicate so a whole class of exceptions can be
  * excluded without wrapping each one. It defaults to "always retryable", which reproduces Go's
  * behavior exactly when left untouched.
  */
-public class RetryConfig {
-    public var maxAttempts: Int = DEFAULT_MAX_ATTEMPTS
-    public var initialDelay: Duration = DEFAULT_INITIAL_DELAY
-    public var maxDelay: Duration = DEFAULT_MAX_DELAY
-    public var multiplier: Double = DEFAULT_MULTIPLIER
-    public var useJitter: Boolean = false
-    public var retryIf: (Throwable) -> Boolean = { true }
-
-    /**
-     * Clamps zero/invalid fields to their defaults in place — the analog of `Config.EnsureDefaults`.
-     * Clamping (rather than merely zero-checking) means a negative delay or a sub-1.0 multiplier —
-     * either of which would produce a pathological policy — can't slip through, since policy
-     * construction has no error return to reject it.
-     */
-    public fun ensureDefaults() {
-        if (maxAttempts <= 0) maxAttempts = DEFAULT_MAX_ATTEMPTS
-        if (initialDelay <= Duration.ZERO) initialDelay = DEFAULT_INITIAL_DELAY
-        if (maxDelay <= Duration.ZERO) maxDelay = DEFAULT_MAX_DELAY
-        if (multiplier < 1.0) multiplier = DEFAULT_MULTIPLIER
-    }
-
-    /**
-     * Validates the config, throwing [IllegalArgumentException] on the first violation — the analog
-     * of `Config.ValidateWithContext`. Manual `require()` checks stand in for ozzo-validation, which
-     * has no Kotlin/Android equivalent in this port.
-     */
-    public fun validate() {
+public data class RetryConfig(
+    val maxAttempts: Int = DEFAULT_MAX_ATTEMPTS,
+    val initialDelay: Duration = DEFAULT_INITIAL_DELAY,
+    val maxDelay: Duration = DEFAULT_MAX_DELAY,
+    val multiplier: Double = DEFAULT_MULTIPLIER,
+    val useJitter: Boolean = false,
+    val retryIf: (Throwable) -> Boolean = { true },
+) {
+    init {
         require(maxAttempts >= 1) { "retry: maxAttempts must be >= 1, was $maxAttempts" }
         require(initialDelay >= 1.milliseconds) {
             "retry: initialDelay must be >= 1ms, was $initialDelay"
         }
         require(maxDelay >= 1.milliseconds) { "retry: maxDelay must be >= 1ms, was $maxDelay" }
         require(multiplier >= 1.0) { "retry: multiplier must be >= 1.0, was $multiplier" }
-    }
-
-    /** A field-for-field copy, so normalizing a policy's config can't mutate the caller's instance. */
-    internal fun copy(): RetryConfig {
-        val other = RetryConfig()
-        other.maxAttempts = maxAttempts
-        other.initialDelay = initialDelay
-        other.maxDelay = maxDelay
-        other.multiplier = multiplier
-        other.useJitter = useJitter
-        other.retryIf = retryIf
-        return other
     }
 }

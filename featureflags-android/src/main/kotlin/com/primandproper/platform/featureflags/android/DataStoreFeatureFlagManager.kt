@@ -37,16 +37,14 @@ private val Context.featureFlagDataStore: DataStore<Preferences> by preferencesD
  * Seed or update flags by editing the underlying [store] (`store.edit { it[booleanPreferencesKey(
  * "flag")] = true }`) — e.g. from a config sync job.
  *
- * TODO(launchdarkly-android): a LaunchDarkly-backed Android manager (wrapping
- * `com.launchdarkly:launchdarkly-android-client-sdk`) is a documented seam. It needs an Application
- * context and network initialization, so it is impractical to exercise in an off-device unit build;
- * this DataStore store is the working local backend in the meantime.
+ * For a network-backed remote flag source, use the sibling [LaunchDarklyFeatureFlagManager] (over the
+ * LaunchDarkly Android client SDK) instead; this DataStore store is the local/offline backend.
  */
 public class DataStoreFeatureFlagManager(
     public val store: DataStore<Preferences>,
-    observer: Observer? = null,
+    observer: Observer = noopObserver(SERVICE_NAME),
 ) : FeatureFlagManager {
-    private val o11y: Observer = observer ?: noopObserver(SERVICE_NAME)
+    private val o11y: Observer = observer
 
     override suspend fun canUseFeature(
         feature: String,
@@ -119,5 +117,5 @@ public class DataStoreFeatureFlagManager(
  */
 public fun dataStoreFeatureFlagManager(
     context: Context,
-    observer: Observer? = null,
+    observer: Observer = noopObserver(SERVICE_NAME),
 ): DataStoreFeatureFlagManager = DataStoreFeatureFlagManager(context.applicationContext.featureFlagDataStore, observer)

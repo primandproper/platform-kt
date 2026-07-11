@@ -1,19 +1,24 @@
 package com.primandproper.platform.messagequeue.redis
 
 import com.primandproper.platform.circuitbreaking.CircuitBreaker
-import com.primandproper.platform.circuitbreaking.ensureCircuitBreaker
+import com.primandproper.platform.circuitbreaking.NoopCircuitBreaker
 import com.primandproper.platform.messagequeue.Consumer
 import com.primandproper.platform.messagequeue.ConsumerHandler
 import com.primandproper.platform.messagequeue.ConsumerProvider
 import com.primandproper.platform.messagequeue.EmptyTopicNameException
 import com.primandproper.platform.observability.Keys
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.Observer
 import com.primandproper.platform.observability.TracerProvider
 import com.primandproper.platform.observability.span
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -40,6 +45,10 @@ public class RedisConsumer internal constructor(
     private val circuitBreaker: CircuitBreaker,
 ) : Consumer {
     override suspend fun consume() {
+        // Lifecycle observation (P2-37): the loop's start, its every exit path (drained, cancelled,
+        // or crashed), and the subscription teardown are logged in-module, so a consumer dying is no
+        // longer invisible. The observer is already named "<topic>_consumer", so the topic is implicit.
+        o11y.logger.info("starting redis consumer")
         val subscription = client.subscribe(topic)
         try {
             subscription.messages().collect { payload ->
@@ -56,10 +65,35 @@ public class RedisConsumer internal constructor(
                     }
                 }
             }
+            o11y.logger.info("redis consumer stopped: message stream ended")
+        } catch (cancellation: CancellationException) {
+            o11y.logger.info("redis consumer stopped: cancelled")
+            throw cancellation
+        } catch (error: Throwable) {
+            o11y.logger.error("redis consumer stopped: unexpected failure", error)
+            throw error
         } finally {
             withContext(NonCancellable) { subscription.close() }
         }
     }
+
+    /**
+     * The [Consumer.messages] Flow variant: a cold flow that subscribes to the topic on collection,
+     * re-emits each payload from the subscription's own message flow, and releases the subscription when
+     * the collector cancels or the stream ends. The subscription close runs under [NonCancellable] so
+     * cancellation still tears down the server-side subscription (mirroring [consume]'s teardown) rather
+     * than leaking it. Unlike [consume], this variant applies neither the per-message span nor the
+     * circuit breaker — the caller owns delivery.
+     */
+    override fun messages(): Flow<ByteArray> =
+        flow {
+            val subscription = client.subscribe(topic)
+            try {
+                emitAll(subscription.messages())
+            } finally {
+                withContext(NonCancellable) { subscription.close() }
+            }
+        }
 }
 
 /**
@@ -70,19 +104,25 @@ public class RedisConsumerProvider internal constructor(
     private val o11y: Observer,
     private val client: RedisPubSubClient,
     private val circuitBreaker: CircuitBreaker,
-    private val logger: Logger?,
-    private val tracerProvider: TracerProvider?,
+    private val logger: Logger,
+    private val tracerProvider: TracerProvider,
 ) : ConsumerProvider {
     private val cacheMutex = Mutex()
-    private val consumerCache: MutableMap<String, Consumer> = mutableMapOf()
 
-    override suspend fun provideConsumer(
+    // Keyed on (topic, handler), not topic alone: a previous version cached per topic and so silently
+    // returned the first topic's consumer — bound to the *first* handler — for any later handler on
+    // that topic (P2-5). Handler identity (ConsumerHandler is a fun interface) is part of the key, so a
+    // repeated (topic, handler) registration is idempotent while a genuinely different handler gets its
+    // own consumer instead of being dropped on the floor.
+    private val consumerCache: MutableMap<Pair<String, ConsumerHandler>, Consumer> = mutableMapOf()
+
+    override suspend fun consumer(
         topic: String,
         handler: ConsumerHandler,
     ): Consumer {
         if (topic.isEmpty()) throw EmptyTopicNameException()
         return cacheMutex.withLock {
-            consumerCache.getOrPut(topic) {
+            consumerCache.getOrPut(topic to handler) {
                 RedisConsumer(
                     o11y = Observer("${topic}_consumer", logger, tracerProvider),
                     client = client,
@@ -94,7 +134,7 @@ public class RedisConsumerProvider internal constructor(
         }
     }
 
-    override fun close() {
+    override suspend fun close() {
         try {
             client.close()
         } catch (error: Throwable) {
@@ -111,18 +151,18 @@ public class RedisConsumerProvider internal constructor(
  * @param client an override [RedisPubSubClient] (a fake in tests); when `null` a lazily-connecting
  *   [LettuceRedisPubSubClient] is built from [config].
  */
-public fun provideRedisConsumerProvider(
+public fun redisConsumerProvider(
     config: RedisMessageQueueConfig,
-    circuitBreaker: CircuitBreaker? = null,
-    logger: Logger? = null,
-    tracerProvider: TracerProvider? = null,
+    circuitBreaker: CircuitBreaker = NoopCircuitBreaker,
+    logger: Logger = NoopLogger,
+    tracerProvider: TracerProvider = NoopTracerProvider,
     client: RedisPubSubClient? = null,
 ): ConsumerProvider {
     config.validate()
     return RedisConsumerProvider(
         o11y = Observer(CONSUMER_PROVIDER_NAME, logger, tracerProvider),
-        client = client ?: LettuceRedisPubSubClient(config),
-        circuitBreaker = ensureCircuitBreaker(circuitBreaker),
+        client = client ?: LettuceRedisPubSubClient(config, logger),
+        circuitBreaker = circuitBreaker,
         logger = logger,
         tracerProvider = tracerProvider,
     )

@@ -8,7 +8,7 @@ import com.primandproper.platform.analytics.EventReporter
  * stand-in for tests that don't care about delivery.
  */
 public object NoopEventReporter : EventReporter {
-    override fun close() {}
+    override suspend fun close() {}
 
     override suspend fun addUser(
         userID: String,

@@ -11,7 +11,22 @@ import org.apache.http.message.BasicHeader
 import org.elasticsearch.client.Request
 import org.elasticsearch.client.ResponseException
 import org.elasticsearch.client.RestClient
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 import java.util.Base64
+
+/**
+ * Percent-encodes a single REST path segment (an index name or document id) so that reserved
+ * characters — `/`, `?`, `#`, spaces, and non-ASCII bytes — cannot escape the segment, split the
+ * path, or inject query parameters. [URLEncoder] targets the form-encoding scheme, which encodes a
+ * space as `+`; a URI path wants `%20`, so that one substitution is fixed up. Everything else it
+ * escapes is a valid (if occasionally over-cautious) path-segment encoding.
+ *
+ * The low-level [RestClient] preserves the raw path we hand it (`URIBuilder(getRawPath())`), so an
+ * already-encoded segment is not re-encoded downstream.
+ */
+internal fun encodeElasticsearchPathSegment(segment: String): String =
+    URLEncoder.encode(segment, StandardCharsets.UTF_8).replace("+", "%20")
 
 /**
  * The production [ElasticsearchClient], adapting the Elastic JVM client's low-level REST transport
@@ -37,6 +52,9 @@ public class LowLevelElasticsearchClient(
     @Volatile
     private var restClient: RestClient? = null
 
+    /** Percent-encodes an index name or document id before it is interpolated into a REST path. */
+    private fun enc(segment: String): String = encodeElasticsearchPathSegment(segment)
+
     private suspend fun client(): RestClient {
         restClient?.let { return it }
         return mutex.withLock {
@@ -54,7 +72,7 @@ public class LowLevelElasticsearchClient(
     override suspend fun indexExists(index: String): Boolean =
         withContext(Dispatchers.IO) {
             try {
-                client().performRequest(Request("HEAD", "/$index")).statusLine.statusCode == 200
+                client().performRequest(Request("HEAD", "/${enc(index)}")).statusLine.statusCode == 200
             } catch (e: ResponseException) {
                 if (e.response.statusLine.statusCode == 404) false else throw e
             }
@@ -62,7 +80,7 @@ public class LowLevelElasticsearchClient(
 
     override suspend fun createIndex(index: String) {
         withContext(Dispatchers.IO) {
-            client().performRequest(Request("PUT", "/$index"))
+            client().performRequest(Request("PUT", "/${enc(index)}"))
         }
     }
 
@@ -72,7 +90,7 @@ public class LowLevelElasticsearchClient(
         documentJson: String,
     ) {
         withContext(Dispatchers.IO) {
-            val request = Request("PUT", "/$index/_doc/$id")
+            val request = Request("PUT", "/${enc(index)}/_doc/${enc(id)}")
             request.setJsonEntity(documentJson)
             client().performRequest(request)
         }
@@ -83,7 +101,7 @@ public class LowLevelElasticsearchClient(
         queryJson: String,
     ): List<String> =
         withContext(Dispatchers.IO) {
-            val request = Request("POST", "/$index/_search")
+            val request = Request("POST", "/${enc(index)}/_search")
             request.setJsonEntity(queryJson)
             val response = client().performRequest(request)
             val root = response.entity.content.use { mapper.readTree(it) }
@@ -96,7 +114,7 @@ public class LowLevelElasticsearchClient(
     ) {
         withContext(Dispatchers.IO) {
             try {
-                client().performRequest(Request("DELETE", "/$index/_doc/$id"))
+                client().performRequest(Request("DELETE", "/${enc(index)}/_doc/${enc(id)}"))
             } catch (e: ResponseException) {
                 // A delete targeting an absent document returns 404; treat as success (idempotent),
                 // matching platform-go's "not_found is a no-op" handling.
@@ -110,7 +128,7 @@ public class LowLevelElasticsearchClient(
         queryJson: String,
     ) {
         withContext(Dispatchers.IO) {
-            val request = Request("POST", "/$index/_delete_by_query")
+            val request = Request("POST", "/${enc(index)}/_delete_by_query")
             request.addParameter("refresh", "true")
             request.setJsonEntity(queryJson)
             client().performRequest(request)

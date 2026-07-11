@@ -1,5 +1,6 @@
 package com.primandproper.platform.capitalism.stripe
 
+import com.primandproper.platform.capitalism.Currency
 import com.primandproper.platform.capitalism.CustomerCreationInput
 import com.primandproper.platform.capitalism.PaymentIntent
 import com.primandproper.platform.capitalism.PaymentIntentCreationInput
@@ -104,7 +105,7 @@ class StripePaymentManagerOpsTest {
         runTest {
             val stub = StubApiClient()
 
-            val intent = manager(stub).createPaymentIntent(PaymentIntentCreationInput(amount = 1000, currency = "usd"))
+            val intent = manager(stub).createPaymentIntent(PaymentIntentCreationInput(amount = 1000, currency = Currency("usd")))
 
             assertEquals("pi_test", intent.id)
             assertEquals("cs_test", intent.clientSecret)
@@ -118,9 +119,9 @@ class StripePaymentManagerOpsTest {
             val pm = StripePaymentManager(StripeConfig(webhookSecret = "whsec"))
 
             val error = assertFailsWith<Throwable> { pm.createCustomer(CustomerCreationInput(email = "x@y.z")) }
-            assertTrue(isError(error, ErrApiKeyNotConfigured))
+            assertTrue(isError<ApiKeyNotConfiguredException>(error))
             assertFailsWith<Throwable> { pm.createSubscription(SubscriptionCreationInput(customerID = "c", priceID = "p")) }
-            assertFailsWith<Throwable> { pm.createPaymentIntent(PaymentIntentCreationInput(amount = 1, currency = "usd")) }
+            assertFailsWith<Throwable> { pm.createPaymentIntent(PaymentIntentCreationInput(amount = 1, currency = Currency("usd"))) }
         }
 
     @Test
@@ -205,7 +206,7 @@ class StripePaymentManagerOpsTest {
 
         val intent =
             realClient(getter).createPaymentIntent(
-                PaymentIntentCreationInput(amount = 1000, currency = "usd", customerID = "cus_abc", idempotencyKey = "idem-pi-1"),
+                PaymentIntentCreationInput(amount = 1000, currency = Currency("usd"), customerID = "cus_abc", idempotencyKey = "idem-pi-1"),
             )
 
         assertEquals("pi_test", intent.id)

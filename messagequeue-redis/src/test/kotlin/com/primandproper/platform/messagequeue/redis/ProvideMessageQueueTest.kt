@@ -1,5 +1,6 @@
 package com.primandproper.platform.messagequeue.redis
 
+import com.primandproper.platform.messagequeue.ByteArrayMessageEncoder
 import com.primandproper.platform.messagequeue.MessageQueueProvider
 import com.primandproper.platform.messagequeue.noop.NoopConsumerProvider
 import com.primandproper.platform.messagequeue.noop.NoopPublisherProvider
@@ -17,19 +18,20 @@ class ProvideMessageQueueTest {
     fun `redis provider builds a redis-backed publisher provider`() =
         runTest {
             val provider =
-                providePublisherProvider(
+                publisherProvider(
                     MessageQueueProvider.REDIS,
+                    ByteArrayMessageEncoder,
                     redisConfig = config(),
                     redisClient = FakeRedisPubSubClient(),
                 )
-            assertTrue(provider is RedisPublisherProvider)
-            assertNotNull(provider.providePublisher("t"))
+            assertTrue(provider is RedisPublisherProvider<*>)
+            assertNotNull(provider.publisher("t"))
         }
 
     @Test
     fun `redis provider builds a redis-backed consumer provider`() {
         val provider =
-            provideConsumerProvider(
+            consumerProvider(
                 MessageQueueProvider.REDIS,
                 redisConfig = config(),
                 redisClient = FakeRedisPubSubClient(),
@@ -39,15 +41,17 @@ class ProvideMessageQueueTest {
 
     @Test
     fun `redis provider without a config fails fast`() {
-        assertFailsWith<IllegalArgumentException> { providePublisherProvider(MessageQueueProvider.REDIS) }
-        assertFailsWith<IllegalArgumentException> { provideConsumerProvider(MessageQueueProvider.REDIS) }
+        assertFailsWith<IllegalArgumentException> {
+            publisherProvider(MessageQueueProvider.REDIS, ByteArrayMessageEncoder)
+        }
+        assertFailsWith<IllegalArgumentException> { consumerProvider(MessageQueueProvider.REDIS) }
     }
 
     @Test
     fun `unported providers fall back to noop`() {
         for (p in listOf(MessageQueueProvider.SQS, MessageQueueProvider.PUBSUB, MessageQueueProvider.KAFKA, null)) {
-            assertTrue(providePublisherProvider(p) is NoopPublisherProvider, "publisher for $p")
-            assertTrue(provideConsumerProvider(p) is NoopConsumerProvider, "consumer for $p")
+            assertTrue(publisherProvider(p, ByteArrayMessageEncoder) is NoopPublisherProvider<*>, "publisher for $p")
+            assertTrue(consumerProvider(p) is NoopConsumerProvider, "consumer for $p")
         }
     }
 }

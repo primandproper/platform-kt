@@ -60,10 +60,11 @@ class EnvSecretSourceTest {
         }
 
     @Test
-    fun `close is a no-op`() {
-        val (source, _) = recordingSource(emptyMap())
-        source.close()
-    }
+    fun `close is a no-op`() =
+        runTest {
+            val (source, _) = recordingSource(emptyMap())
+            source.close()
+        }
 
     @Test
     fun `public constructor reads real process environment`() =

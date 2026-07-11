@@ -3,6 +3,8 @@ package com.primandproper.platform.authentication.tokens.config
 import com.primandproper.platform.authentication.tokens.Issuer
 import com.primandproper.platform.authentication.tokens.jwt.newJwtSigner
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.Observer
 import com.primandproper.platform.observability.TracerProvider
 import java.time.Clock
@@ -16,7 +18,7 @@ public const val PROVIDER_JWT: String = "jwt"
 /**
  * Selects PASETO as the token backend. Port of platform-go's `tokenscfg.ProviderPASETO`. PASETO v2
  * local tokens are XChaCha20-Poly1305, which the JDK does not provide — so this port leaves the
- * PASETO backend as a documented `TODO(paseto)` seam and [TokensConfig.provideTokenIssuer] throws for
+ * PASETO backend as a documented `TODO(paseto)` seam and [TokensConfig.Issuer] throws for
  * it, exactly as `:cryptography-jvm` leaves `salsa20` a seam.
  */
 public const val PROVIDER_PASETO: String = "paseto"
@@ -57,9 +59,9 @@ public data class TokensConfig(
      * @throws IllegalArgumentException when the signing key is not valid base64url, is not 32 bytes,
      *   or the provider is unknown/unsupported.
      */
-    public fun provideTokenIssuer(
-        logger: Logger? = null,
-        tracerProvider: TracerProvider? = null,
+    public fun Issuer(
+        logger: Logger = NoopLogger,
+        tracerProvider: TracerProvider = NoopTracerProvider,
         clock: Clock = Clock.systemUTC(),
     ): Issuer {
         val decodedKey =
@@ -70,9 +72,22 @@ public data class TokensConfig(
             "token signing key must be $SIGNING_KEY_BYTES bytes, was ${decodedKey.size}"
         }
 
+        // Both maxima are hard ceilings on token lifetime; the issuer mints against a single expiry
+        // and cannot tell an access token from a refresh token, so it enforces the longest configured
+        // ceiling as an absolute upper bound (ZERO on both leaves it disabled). This is what stops a
+        // caller from minting an arbitrarily long-lived token.
+        val maxLifetime = maxOf(maxAccessTokenLifetime, maxRefreshTokenLifetime)
+
         return when (provider.trim().lowercase()) {
             PROVIDER_JWT ->
-                newJwtSigner(issuer, audience, decodedKey, Observer("jwt_signer", logger, tracerProvider), clock)
+                newJwtSigner(
+                    issuer,
+                    audience,
+                    decodedKey,
+                    Observer("jwt_signer", logger, tracerProvider),
+                    clock,
+                    maxLifetime,
+                )
             PROVIDER_PASETO ->
                 throw IllegalArgumentException("TODO(paseto): PASETO token backend is not yet implemented in this port")
             else ->

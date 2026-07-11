@@ -10,13 +10,33 @@ import kotlin.time.Duration.Companion.seconds
 
 /**
  * Provider names, ported from platform-go's `databasecfg.ProviderPostgres`/`ProviderMySQL`/
- * `ProviderSQLite` constants. Kept as plain strings (not an enum) because Go's `Config.Provider` is a
- * free-form string — a service may set an unknown provider and have validation reject it.
+ * `ProviderSQLite` constants, modelled as an enum so an unknown provider is rejected the way Go's
+ * validation rejects it. [value] is the wire/string form validated against configuration.
+ *
+ * Go's `Config.Provider` is a free-form string that a service may set to an unknown value; this port
+ * turns the raw string into the enum once, at the parse edge ([DatabaseConfig.providerFromValue] /
+ * [fromValue]), where a blank value resolves to [POSTGRES] and an unknown one fails loudly (the P2-36
+ * loud-failure contract) — so everything downstream consumes the typed value.
  */
-public object DatabaseProviders {
-    public const val POSTGRES: String = "postgres"
-    public const val MYSQL: String = "mysql"
-    public const val SQLITE: String = "sqlite"
+public enum class DatabaseProvider(
+    public val value: String,
+) {
+    POSTGRES("postgres"),
+    MYSQL("mysql"),
+    SQLITE("sqlite"),
+    ;
+
+    public companion object {
+        /**
+         * Resolves a provider from its string [value] (trimmed, case-insensitive), or `null` if it
+         * names no known provider. A blank value resolves to `null` here; the module's blank→[POSTGRES]
+         * default is applied by [DatabaseConfig.providerFromValue].
+         */
+        public fun fromValue(value: String): DatabaseProvider? {
+            val normalized = value.trim().lowercase()
+            return entries.firstOrNull { it.value == normalized }
+        }
+    }
 }
 
 /**
@@ -158,19 +178,18 @@ internal fun quotePgConnValue(value: String): String = "'" + value.replace("\\",
  * The database configuration. Port of platform-go's `databasecfg.Config` (the portable subset — the
  * `Encryption` sub-config, which belongs to `:cryptography`, is intentionally omitted).
  *
- * Implements [ClientConfig] so it can be handed straight to a database client. The getter methods
- * apply the same zero-value fallbacks Go's getters do (50 ping attempts, 5 idle / 7 open connections,
- * 30-minute connection lifetime), so an unset field never leaks a bare zero to a client.
- *
- * Immutable: [ensureDefaults] returns a normalized copy rather than mutating in place (Go's
- * `EnsureDefaults` mutates the receiver).
+ * Immutable, with the constructor's default arguments supplying every field's default. Its resolving
+ * getter methods are the single source of the zero-value fallbacks Go's getters apply (50 ping
+ * attempts, 5 idle / 7 open connections, 30-minute connection lifetime), so an unset field never leaks
+ * a bare zero; [toClientConfig] bundles the resolved values into the immutable [ClientConfig] a client
+ * consumes. A `null` [writeConnection] (the default) means no separate write connection is configured.
  */
 public data class DatabaseConfig(
-    val provider: String = DatabaseProviders.POSTGRES,
+    val provider: DatabaseProvider = DatabaseProvider.POSTGRES,
     val readConnection: ConnectionDetails = ConnectionDetails(),
-    val writeConnection: ConnectionDetails = ConnectionDetails(),
+    val writeConnection: ConnectionDetails? = null,
     val pingWaitPeriod: Duration = 1.seconds,
-    val maxPingAttempts: Long = 0,
+    val maxPingAttempts: Int = 0,
     val connMaxLifetime: Duration = Duration.ZERO,
     val maxIdleConns: Int = 0,
     val maxOpenConns: Int = 0,
@@ -178,68 +197,77 @@ public data class DatabaseConfig(
     val logQueries: Boolean = false,
     val runMigrations: Boolean = false,
     val enableDatabaseMetrics: Boolean = false,
-) : ClientConfig {
-    private fun normalizedProvider(): String = provider.trim().lowercase()
+) {
+    /** The read connection string in the provider's native form. */
+    public fun readConnectionString(): String = connectionStringForProvider(readConnection)
 
-    /** The read connection string in the provider's native form. Implements [ClientConfig.readConnectionString]. */
-    override fun readConnectionString(): String = connectionStringForProvider(readConnection)
-
-    /** The write connection string in the provider's native form. Implements [ClientConfig.writeConnectionString]. */
-    override fun writeConnectionString(): String = connectionStringForProvider(writeConnection)
+    /** The write connection string in the provider's native form, or `""` when no write connection is set. */
+    public fun writeConnectionString(): String = writeConnection?.let(::connectionStringForProvider) ?: ""
 
     private fun connectionStringForProvider(cd: ConnectionDetails): String =
-        when (normalizedProvider()) {
-            DatabaseProviders.MYSQL -> cd.mysqlDsn()
-            DatabaseProviders.SQLITE -> cd.sqliteDsn()
-            else -> cd.postgresConnectionString()
+        when (provider) {
+            DatabaseProvider.MYSQL -> cd.mysqlDsn()
+            DatabaseProvider.SQLITE -> cd.sqliteDsn()
+            DatabaseProvider.POSTGRES -> cd.postgresConnectionString()
         }
 
     /** Returns [maxPingAttempts], or 50 when unset, so a client retries rather than pinging once. */
-    override fun maxPingAttempts(): Long = if (maxPingAttempts == 0L) DEFAULT_MAX_PING_ATTEMPTS else maxPingAttempts
+    public fun maxPingAttempts(): Int = if (maxPingAttempts == 0) DEFAULT_MAX_PING_ATTEMPTS else maxPingAttempts
 
-    override fun pingWaitPeriod(): Duration = pingWaitPeriod
+    /** Returns [pingWaitPeriod]. */
+    public fun pingWaitPeriod(): Duration = pingWaitPeriod
 
     /** Returns [maxIdleConns], or 5 when unset. */
-    override fun maxIdleConns(): Int = if (maxIdleConns == 0) DEFAULT_MAX_IDLE_CONNS else maxIdleConns
+    public fun maxIdleConns(): Int = if (maxIdleConns == 0) DEFAULT_MAX_IDLE_CONNS else maxIdleConns
 
     /** Returns [maxOpenConns], or 7 when unset. */
-    override fun maxOpenConns(): Int = if (maxOpenConns == 0) DEFAULT_MAX_OPEN_CONNS else maxOpenConns
+    public fun maxOpenConns(): Int = if (maxOpenConns == 0) DEFAULT_MAX_OPEN_CONNS else maxOpenConns
 
     /** Returns [connMaxLifetime], or 30 minutes when unset or non-positive. */
-    override fun connMaxLifetime(): Duration = if (connMaxLifetime.isPositive()) connMaxLifetime else DEFAULT_CONN_MAX_LIFETIME
+    public fun connMaxLifetime(): Duration = if (connMaxLifetime.isPositive()) connMaxLifetime else DEFAULT_CONN_MAX_LIFETIME
 
-    override fun logQueries(): Boolean = logQueries
+    /** Returns [logQueries]. */
+    public fun logQueries(): Boolean = logQueries
+
+    /**
+     * Bundles the resolved (fallback-applied) settings into the immutable [ClientConfig] a database
+     * client consumes, so the client never re-derives a default. Connection strings are rendered in the
+     * configured provider's native form.
+     */
+    public fun toClientConfig(): ClientConfig =
+        ClientConfig(
+            readConnectionString = readConnectionString(),
+            writeConnectionString = writeConnectionString(),
+            maxPingAttempts = maxPingAttempts(),
+            pingWaitPeriod = pingWaitPeriod(),
+            maxIdleConns = maxIdleConns(),
+            maxOpenConns = maxOpenConns(),
+            connMaxLifetime = connMaxLifetime(),
+            logQueries = logQueries(),
+        )
 
     /**
      * The JDBC/driver name for the configured provider (Go's `driverName`): `mysql`, `sqlite`, or `pgx`
-     * for Postgres and any unknown provider.
+     * for Postgres.
      */
     public fun driverName(): String =
-        when (normalizedProvider()) {
-            DatabaseProviders.MYSQL -> "mysql"
-            DatabaseProviders.SQLITE -> "sqlite"
-            else -> "pgx"
+        when (provider) {
+            DatabaseProvider.MYSQL -> "mysql"
+            DatabaseProvider.SQLITE -> "sqlite"
+            DatabaseProvider.POSTGRES -> "pgx"
         }
-
-    /** Returns a copy with sensible defaults filled in for zero-valued fields. Port of Go's `EnsureDefaults`. */
-    public fun ensureDefaults(): DatabaseConfig =
-        copy(
-            provider = provider.ifBlank { DatabaseProviders.POSTGRES },
-            pingWaitPeriod = if (pingWaitPeriod == Duration.ZERO) 1.seconds else pingWaitPeriod,
-            connMaxLifetime = if (connMaxLifetime == Duration.ZERO) DEFAULT_CONN_MAX_LIFETIME else connMaxLifetime,
-            maxIdleConns = if (maxIdleConns == 0) DEFAULT_MAX_IDLE_CONNS else maxIdleConns,
-            maxOpenConns = if (maxOpenConns == 0) DEFAULT_MAX_OPEN_CONNS else maxOpenConns,
-            maxPingAttempts = if (maxPingAttempts == 0L) DEFAULT_MAX_PING_ATTEMPTS else maxPingAttempts,
-        )
 
     /**
      * Validates the config, throwing PlatformException on failure. Provider-aware, mirroring Go:
      * SQLite only needs a database file path on either connection, while every other provider requires
      * a fully specified read connection; a supplied write connection is validated regardless.
+     *
+     * The unknown-provider rejection now lives at the parse edge ([providerFromValue]): [provider] is
+     * already a typed [DatabaseProvider], so an unrecognized name can never reach here.
      */
     public fun validate() {
-        if (normalizedProvider() == DatabaseProviders.SQLITE) {
-            if (readConnection.database.isBlank() && writeConnection.database.isBlank()) {
+        if (provider == DatabaseProvider.SQLITE) {
+            if (readConnection.database.isBlank() && writeConnection?.database.isNullOrBlank()) {
                 throw newError("sqlite requires a database file path on the read or write connection")
             }
             return
@@ -247,15 +275,28 @@ public data class DatabaseConfig(
 
         readConnection.validate()
 
-        if (writeConnection != ConnectionDetails()) {
-            writeConnection.validate()
-        }
+        writeConnection?.validate()
     }
 
     public companion object {
-        private const val DEFAULT_MAX_PING_ATTEMPTS = 50L
+        private const val DEFAULT_MAX_PING_ATTEMPTS = 50
         private const val DEFAULT_MAX_IDLE_CONNS = 5
         private const val DEFAULT_MAX_OPEN_CONNS = 7
         private val DEFAULT_CONN_MAX_LIFETIME = 30.minutes
+
+        /**
+         * The parse edge: resolves a raw provider string (e.g. from config) to a [DatabaseProvider],
+         * treating a blank value as [DatabaseProvider.POSTGRES] (the default) and rejecting a non-blank
+         * unknown name loudly (the P2-36 loud-failure contract), the same discipline as
+         * `SecretsConfig.providerFromValue`.
+         *
+         * @throws com.primandproper.platform.errors.PlatformException for a non-blank unknown provider.
+         */
+        public fun providerFromValue(value: String): DatabaseProvider =
+            if (value.isBlank()) {
+                DatabaseProvider.POSTGRES
+            } else {
+                DatabaseProvider.fromValue(value) ?: throw newError("unknown database provider: \"$value\"")
+            }
     }
 }

@@ -9,8 +9,10 @@ import com.primandproper.platform.uploads.SaveOptions
 import com.primandproper.platform.uploads.SignedUrlOptions
 import com.primandproper.platform.uploads.UploadManager
 import com.primandproper.platform.uploads.UrlSigner
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.withContext
 import java.io.InputStream
 
 /**
@@ -19,7 +21,7 @@ import java.io.InputStream
  * `uploads/noop.UploadManager`. A safe default for wiring, and for tests that don't care about real
  * storage.
  */
-public class NoopUploadManager :
+public object NoopUploadManager :
     UploadManager,
     RangeReader,
     UrlSigner,
@@ -31,7 +33,8 @@ public class NoopUploadManager :
         source: InputStream,
         options: SaveOptions,
     ) {
-        source.copyTo(NULL_OUTPUT_STREAM)
+        // Draining the stream is a blocking copy; hop off the caller's dispatcher.
+        withContext(Dispatchers.IO) { source.copyTo(NULL_OUTPUT_STREAM) }
     }
 
     override suspend fun open(path: String): InputStream = InputStream.nullInputStream()
@@ -56,16 +59,14 @@ public class NoopUploadManager :
         options: SignedUrlOptions,
     ): String = ""
 
-    private companion object {
-        private val NULL_OUTPUT_STREAM =
-            object : java.io.OutputStream() {
-                override fun write(b: Int) {}
+    private val NULL_OUTPUT_STREAM =
+        object : java.io.OutputStream() {
+            override fun write(b: Int) {}
 
-                override fun write(
-                    b: ByteArray,
-                    off: Int,
-                    len: Int,
-                ) {}
-            }
-    }
+            override fun write(
+                b: ByteArray,
+                off: Int,
+                len: Int,
+            ) {}
+        }
 }

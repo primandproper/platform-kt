@@ -1,5 +1,6 @@
 package com.primandproper.platform.routing.ktor
 
+import com.primandproper.platform.routing.HttpMethod
 import com.primandproper.platform.routing.RoutingCall
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
@@ -19,7 +20,9 @@ import io.ktor.server.response.respondText
 internal class KtorRoutingCall(
     private val call: ApplicationCall,
 ) : RoutingCall {
-    override val method: String get() = call.request.httpMethod.value
+    // Ktor only dispatches to this call after matching a registered verb, so the method is always one
+    // the platform enum names; fall back to GET defensively for any exotic verb rather than throw.
+    override val method: HttpMethod get() = HttpMethod.fromWire(call.request.httpMethod.value) ?: HttpMethod.GET
 
     override val path: String get() = call.request.path()
 

@@ -34,9 +34,16 @@ class IssuerMockTest {
             ClaimsMock(
                 subjectFunc = { "subject-1" },
                 expiresAtFunc = { Instant.EPOCH },
+                getFunc = { key -> if (key == "k") 42 else null },
+                getStringOrNullFunc = { key -> if (key == "k") "v" else null },
             )
         assertEquals("subject-1", mock.subject())
         assertEquals(Instant.EPOCH, mock.expiresAt())
-        assertEquals(1, mock.subjectCalls.size)
+        assertEquals(1, mock.subjectCalls)
+
+        assertEquals(42, mock["k"])
+        assertEquals("v", mock.getStringOrNull("k"))
+        assertEquals(listOf("k"), mock.getCalls)
+        assertEquals(listOf("k"), mock.getStringOrNullCalls)
     }
 }

@@ -11,7 +11,7 @@ class NoopEmbedderTest {
     @Test
     fun `generateEmbedding returns an empty vector with noop provenance`() =
         runTest {
-            val result = NoopEmbedder().generateEmbedding(EmbeddingInput(content = "hello world"))
+            val result = NoopEmbedder.generateEmbedding(EmbeddingInput(content = "hello world"))
 
             assertTrue(result.vector.isEmpty())
             assertEquals(0, result.dimensions)

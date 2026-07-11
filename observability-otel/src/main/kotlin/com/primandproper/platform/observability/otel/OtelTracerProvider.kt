@@ -3,6 +3,7 @@ package com.primandproper.platform.observability.otel
 import com.primandproper.platform.observability.Span
 import com.primandproper.platform.observability.Tracer
 import com.primandproper.platform.observability.TracerProvider
+import io.opentelemetry.api.OpenTelemetry
 import io.opentelemetry.api.common.AttributeKey
 import io.opentelemetry.api.common.Attributes
 import io.opentelemetry.api.trace.propagation.W3CTraceContextPropagator
@@ -38,6 +39,13 @@ internal class OtelTracer(
 public class OtelTracerProvider internal constructor(
     private val sdk: OpenTelemetrySdk,
 ) : TracerProvider {
+    /**
+     * The backing [OpenTelemetry] SDK ([OpenTelemetrySdk] implements [OpenTelemetry]). Hand this to
+     * instrumentation that speaks the OTel API directly — e.g. the HTTP client factories'
+     * `openTelemetry` parameter — so outbound calls emit client spans and inject `traceparent`.
+     */
+    public val openTelemetry: OpenTelemetry get() = sdk
+
     override fun tracer(name: String): Tracer = OtelTracer(sdk.getTracer(name))
 
     override fun forceFlush() {

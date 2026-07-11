@@ -7,6 +7,8 @@ import com.google.zxing.qrcode.QRCodeWriter
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 import com.primandproper.platform.observability.Keys
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.Observer
 import com.primandproper.platform.observability.TracerProvider
 import com.primandproper.platform.observability.span
@@ -45,8 +47,8 @@ public class DefaultQrCodeBuilder internal constructor(
     public constructor(
         issuer: String,
         size: Int = DEFAULT_QR_SIZE,
-        logger: Logger? = null,
-        tracerProvider: TracerProvider? = null,
+        logger: Logger = NoopLogger,
+        tracerProvider: TracerProvider = NoopTracerProvider,
     ) : this(issuer, size, Observer(NAME, logger, tracerProvider))
 
     override suspend fun buildQrCode(

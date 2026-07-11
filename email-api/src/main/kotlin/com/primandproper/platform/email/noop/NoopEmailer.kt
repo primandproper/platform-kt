@@ -8,7 +8,7 @@ import com.primandproper.platform.email.OutboundEmailMessage
  * default the config factory falls back to when no provider is selected, and for tests that don't
  * care about real delivery.
  */
-public class NoopEmailer : Emailer {
+public object NoopEmailer : Emailer {
     override suspend fun sendEmail(details: OutboundEmailMessage) {
     }
 }

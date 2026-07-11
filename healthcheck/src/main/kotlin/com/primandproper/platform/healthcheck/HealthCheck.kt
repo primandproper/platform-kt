@@ -1,10 +1,14 @@
 package com.primandproper.platform.healthcheck
 
+import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withTimeout
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
@@ -78,14 +82,26 @@ public interface Registry {
     public suspend fun checkAll(): Result
 }
 
-/** Returns a new, empty [Registry]. Port of platform-go's `NewRegistry`. */
-public fun Registry(): Registry = DefaultRegistry()
+/**
+ * Returns a new, empty [Registry]. Port of platform-go's `NewRegistry`.
+ *
+ * @param logger optional logger; defaults to noop. When supplied, a component's transitions between
+ *   healthy and unhealthy are logged so a flapping dependency is visible instead of being silently
+ *   folded into the aggregate [Result].
+ */
+public fun Registry(logger: Logger = NoopLogger): Registry = DefaultRegistry(logger)
 
-internal class DefaultRegistry : Registry {
+internal class DefaultRegistry(
+    private val logger: Logger,
+) : Registry {
     // Go guards its checker slice with a sync.RWMutex; registration happens off the coroutine world
     // (typically at wiring time), so a plain monitor lock is the faithful, non-suspending analog.
     private val lock = Any()
     private val checkers = mutableListOf<Checker>()
+
+    // Last observed status per component, so checkAll can log only the failing/recovering transitions
+    // (not every probe) — the signal that makes a flapping component visible. Guarded by [lock].
+    private val lastStatus = mutableMapOf<String, Status>()
 
     override fun register(checker: Checker?) {
         if (checker == null) return
@@ -109,6 +125,7 @@ internal class DefaultRegistry : Registry {
             var status = Status.UP
             for ((name, result) in outcomes) {
                 components[name] = result
+                logTransition(name, result)
                 if (result.status == Status.DOWN) {
                     status = Status.DOWN
                 }
@@ -117,12 +134,29 @@ internal class DefaultRegistry : Registry {
             Result(components = components, status = status)
         }
 
+    /** Logs a component only when it crosses between healthy and unhealthy, so flapping is visible. */
+    private fun logTransition(
+        name: String,
+        result: ComponentResult,
+    ) {
+        val previous = synchronized(lock) { lastStatus.put(name, result.status) }
+        when {
+            result.status == Status.DOWN && previous != Status.DOWN ->
+                logger.withValue("component", name).withValue("reason", result.message).warn("health check failed")
+            result.status == Status.UP && previous == Status.DOWN ->
+                logger.withValue("component", name).info("health check recovered")
+        }
+    }
+
     private suspend fun runChecked(checker: Checker): ComponentResult =
         try {
             withTimeout(DEFAULT_CHECK_TIMEOUT) { checker.check() }
             ComponentResult(Status.UP)
         } catch (timeout: TimeoutCancellationException) {
-            // The check overran its deadline: down, exactly as a Go check returning context.DeadlineExceeded.
+            // Only OUR per-check withTimeout should count as DOWN. If the *enclosing* scope is itself
+            // being cancelled (an ancestor withTimeout, or a cancelled probe), this cancellation isn't
+            // the check's own deadline — rethrow it instead of misreporting the component as down.
+            currentCoroutineContext().ensureActive()
             ComponentResult(Status.DOWN, timeout.message ?: "health check timed out")
         } catch (cancellation: CancellationException) {
             // A cancellation of the enclosing scope is not a check failure; let it propagate.

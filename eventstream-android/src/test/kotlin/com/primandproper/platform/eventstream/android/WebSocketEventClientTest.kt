@@ -141,4 +141,59 @@ class WebSocketEventClientTest {
             withTimeoutOrNull(5_000) { session.incoming.collect { } }
             Unit // keep the test's return type Unit (JUnit rejects a Unit? -returning @Test)
         }
+
+    @Test
+    fun `an undecodable frame is reported to the observer with a running drop count`() =
+        runBlocking {
+            val observer = RecordingEventStreamObserver()
+            server.enqueue(
+                MockResponse().withWebSocketUpgrade(
+                    object : WebSocketListener() {
+                        override fun onOpen(
+                            webSocket: WebSocket,
+                            response: Response,
+                        ) {
+                            webSocket.send("this is not json")
+                            webSocket.send(EventCodec.encode(Event("good", """{"ok":true}""")))
+                        }
+
+                        override fun onClosing(
+                            webSocket: WebSocket,
+                            code: Int,
+                            reason: String,
+                        ) = webSocket.close(code, reason).let { }
+                    },
+                ),
+            )
+
+            val session = WebSocketEventClient(client, observer).open(request())
+            val event = session.incoming.first()
+
+            assertEquals(Event("good", """{"ok":true}"""), event)
+            assertEquals(listOf("this is not json"), observer.undecodable)
+            assertEquals(1L, observer.lastDropCount)
+            session.close()
+            withTimeoutOrNull(5_000) { session.incoming.collect { } }
+            Unit // keep the test's return type Unit (JUnit rejects a Unit? -returning @Test)
+        }
+
+    private class RecordingEventStreamObserver : EventStreamObserver {
+        val undecodable = mutableListOf<String>()
+        var lastDropCount = 0L
+
+        override fun onUndecodableFrame(
+            raw: String,
+            droppedTotal: Long,
+        ) {
+            undecodable += raw
+            lastDropCount = droppedTotal
+        }
+
+        override fun onDroppedEvent(
+            event: Event,
+            droppedTotal: Long,
+        ) {
+            lastDropCount = droppedTotal
+        }
+    }
 }

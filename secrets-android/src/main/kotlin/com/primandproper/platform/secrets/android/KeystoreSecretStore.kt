@@ -5,11 +5,15 @@ import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.Observer
 import com.primandproper.platform.observability.TracerProvider
 import com.primandproper.platform.observability.span
 import com.primandproper.platform.secrets.SecretNotFoundException
 import com.primandproper.platform.secrets.SecretSource
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * An Android [SecretSource] backed by the hardware-backed Android Keystore. Secrets live in an
@@ -37,13 +41,13 @@ public class KeystoreSecretStore internal constructor(
         o11y.span("GetSecret") {
             // NOTE: only the secret's lookup key is observed, never its value.
             set("secret_key", name)
-            if (!prefs.contains(name)) {
-                throw error(SecretNotFoundException(name), "secret not present in keystore store")
-            }
-            prefs.getString(name, null) ?: throw error(
-                SecretNotFoundException(name),
-                "secret not present in keystore store",
-            )
+            // EncryptedSharedPreferences decrypts on the calling thread; hop to IO so a suspend caller
+            // on the main thread is never blocked on the Keystore.
+            val value =
+                withContext(Dispatchers.IO) {
+                    if (prefs.contains(name)) prefs.getString(name, null) else null
+                }
+            value ?: throw error(SecretNotFoundException(name), "secret not present in keystore store")
         }
 
     /**
@@ -57,17 +61,23 @@ public class KeystoreSecretStore internal constructor(
     ): Unit =
         o11y.span("PutSecret") {
             set("secret_key", name)
-            prefs.edit().putString(name, value).apply()
+            // Encrypting the value writes through the Keystore-backed cipher; keep it off the caller's
+            // (possibly main) thread.
+            withContext(Dispatchers.IO) {
+                prefs.edit().putString(name, value).apply()
+            }
         }
 
     /** Removes the secret under [name] if present. Records only the key. */
     public suspend fun removeSecret(name: String): Unit =
         o11y.span("RemoveSecret") {
             set("secret_key", name)
-            prefs.edit().remove(name).apply()
+            withContext(Dispatchers.IO) {
+                prefs.edit().remove(name).apply()
+            }
         }
 
-    override fun close() {
+    override suspend fun close() {
         o11y.logger.debug("closing keystore secret store")
     }
 
@@ -88,8 +98,8 @@ public class KeystoreSecretStore internal constructor(
         public fun create(
             context: Context,
             fileName: String = DEFAULT_FILE_NAME,
-            logger: Logger? = null,
-            tracerProvider: TracerProvider? = null,
+            logger: Logger = NoopLogger,
+            tracerProvider: TracerProvider = NoopTracerProvider,
         ): KeystoreSecretStore {
             val masterKey =
                 MasterKey.Builder(context)

@@ -53,7 +53,7 @@ public data class RouterSettings(
  * Configures the router. Port of Go's `routingcfg.Config` (`Provider` + nested `*chi.Config`).
  *
  * @param provider which backend to build; the provider factory lives in the backend module
- *   (`:routing-ktor`'s `provideRouter`), matching how Go's `routingcfg.ProvideRouter` dispatches to
+ *   (`:routing-ktor`'s `Router`), matching how Go's `routingcfg.ProvideRouter` dispatches to
  *   `chi.NewRouter`.
  * @param router the backend settings applied to the chosen provider.
  */

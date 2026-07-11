@@ -15,12 +15,15 @@ plugins {
 // `:database-api` is ported it is kept here, mirroring how `:circuitbreaking` temporarily owns
 // `ErrCircuitBroken`.
 //
-// No observability dependency: unlike `:cache-api`, platform-go's `healthcheck` package does not
-// instrument — it opens no Observer span and records nothing — so a faithful port carries none. The
-// probe is meant to be exposed through an actuator-style endpoint; that HTTP wiring is the server
-// module's job (see the TODO note on `Registry`), not this one's.
+// Logging only, no tracing: platform-go's `healthcheck` opens no Observer span, so this port carries
+// no tracer. It does take an optional [Logger] (defaulting to noop) so a flapping component's failures
+// and recoveries are visible instead of silently folded into the aggregate — the `Logger` appears on
+// the public `Registry(...)` surface, hence `api(:observability-api)`. The probe is still meant to be
+// exposed through an actuator-style endpoint; that HTTP wiring is the server module's job (see the
+// TODO note on `Registry`), not this one's.
 dependencies {
     api(project(":errors"))
+    api(project(":observability-api"))
     api(libs.kotlinx.coroutines.core)
 
     testImplementation(libs.kotlin.test)

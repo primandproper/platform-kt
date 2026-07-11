@@ -7,7 +7,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
-import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
@@ -18,39 +17,33 @@ class DatabaseConfigTest {
         ConnectionDetails(host = "localhost", username = "root", password = "password", port = 5432, database = "test")
 
     @Test
-    fun `EnsureDefaults sets all defaults on a zero-value config`() {
-        val cfg =
-            DatabaseConfig(
-                provider = "",
-                pingWaitPeriod = Duration.ZERO,
-                connMaxLifetime = Duration.ZERO,
-                maxIdleConns = 0,
-                maxOpenConns = 0,
-            ).ensureDefaults()
+    fun `an omitted config resolves every default through its getters`() {
+        val cfg = DatabaseConfig()
 
-        assertEquals(DatabaseProviders.POSTGRES, cfg.provider)
-        assertEquals(1.seconds, cfg.pingWaitPeriod)
-        assertEquals(30.minutes, cfg.connMaxLifetime)
-        assertEquals(5, cfg.maxIdleConns)
-        assertEquals(7, cfg.maxOpenConns)
+        assertEquals("pgx", DatabaseConfig(provider = DatabaseConfig.providerFromValue("")).driverName())
+        assertEquals(1.seconds, cfg.pingWaitPeriod())
+        assertEquals(30.minutes, cfg.connMaxLifetime())
+        assertEquals(5, cfg.maxIdleConns())
+        assertEquals(7, cfg.maxOpenConns())
+        assertEquals(50, cfg.maxPingAttempts())
     }
 
     @Test
-    fun `EnsureDefaults does not override set values`() {
+    fun `explicit values are passed through unchanged`() {
         val cfg =
             DatabaseConfig(
-                provider = "custom",
+                provider = DatabaseProvider.MYSQL,
                 pingWaitPeriod = 5.seconds,
                 connMaxLifetime = 1.hours,
                 maxIdleConns = 10,
                 maxOpenConns = 20,
-            ).ensureDefaults()
+            )
 
-        assertEquals("custom", cfg.provider)
-        assertEquals(5.seconds, cfg.pingWaitPeriod)
-        assertEquals(1.hours, cfg.connMaxLifetime)
-        assertEquals(10, cfg.maxIdleConns)
-        assertEquals(20, cfg.maxOpenConns)
+        assertEquals(DatabaseProvider.MYSQL, cfg.provider)
+        assertEquals(5.seconds, cfg.pingWaitPeriod())
+        assertEquals(1.hours, cfg.connMaxLifetime())
+        assertEquals(10, cfg.maxIdleConns())
+        assertEquals(20, cfg.maxOpenConns())
     }
 
     @Test
@@ -73,8 +66,8 @@ class DatabaseConfigTest {
 
     @Test
     fun `getters apply zero-value fallbacks and pass set values through`() {
-        assertEquals(42L, DatabaseConfig(maxPingAttempts = 42).maxPingAttempts())
-        assertEquals(50L, DatabaseConfig().maxPingAttempts())
+        assertEquals(42, DatabaseConfig(maxPingAttempts = 42).maxPingAttempts())
+        assertEquals(50, DatabaseConfig().maxPingAttempts())
 
         assertEquals(3.seconds, DatabaseConfig(pingWaitPeriod = 3.seconds).pingWaitPeriod())
 
@@ -107,12 +100,12 @@ class DatabaseConfigTest {
 
     @Test
     fun `sqlite validates with only a database file path`() {
-        DatabaseConfig(provider = DatabaseProviders.SQLITE, readConnection = ConnectionDetails(database = "/tmp/test.db")).validate()
+        DatabaseConfig(provider = DatabaseProvider.SQLITE, readConnection = ConnectionDetails(database = "/tmp/test.db")).validate()
     }
 
     @Test
     fun `sqlite requires a database file path`() {
-        assertFailsWith<PlatformException> { DatabaseConfig(provider = DatabaseProviders.SQLITE).validate() }
+        assertFailsWith<PlatformException> { DatabaseConfig(provider = DatabaseProvider.SQLITE).validate() }
     }
 
     @Test
@@ -120,6 +113,23 @@ class DatabaseConfigTest {
         assertFailsWith<PlatformException> {
             DatabaseConfig(readConnection = fullRead, writeConnection = ConnectionDetails(host = "writehost")).validate()
         }
+    }
+
+    @Test
+    fun `providerFromValue rejects an unknown provider string`() {
+        val ex =
+            assertFailsWith<PlatformException> {
+                DatabaseConfig.providerFromValue("cockroach")
+            }
+        assertTrue(ex.message!!.contains("cockroach"), "error should name the offending provider")
+    }
+
+    @Test
+    fun `providerFromValue resolves the known providers and maps blank to postgres`() {
+        assertEquals(DatabaseProvider.POSTGRES, DatabaseConfig.providerFromValue(""))
+        assertEquals(DatabaseProvider.POSTGRES, DatabaseConfig.providerFromValue("postgres"))
+        assertEquals(DatabaseProvider.MYSQL, DatabaseConfig.providerFromValue("  MYSQL  "))
+        DatabaseConfig(provider = DatabaseProvider.POSTGRES, readConnection = fullRead).validate()
     }
 
     @Test
@@ -195,33 +205,32 @@ class DatabaseConfigTest {
         val pg = ConnectionDetails("user", "pass", "db", "localhost", 5432)
         assertEquals(
             "user='user' password='pass' database='db' host='localhost' port=5432 sslmode=prefer",
-            DatabaseConfig(provider = DatabaseProviders.POSTGRES, readConnection = pg).readConnectionString(),
+            DatabaseConfig(provider = DatabaseProvider.POSTGRES, readConnection = pg).readConnectionString(),
         )
 
         val my = ConnectionDetails("user", "pass", "db", "localhost", 3306)
         assertEquals(
             "user:pass@tcp(localhost:3306)/db?parseTime=true",
-            DatabaseConfig(provider = DatabaseProviders.MYSQL, readConnection = my).readConnectionString(),
+            DatabaseConfig(provider = DatabaseProvider.MYSQL, readConnection = my).readConnectionString(),
         )
 
         assertEquals(
             "/tmp/test.db",
-            DatabaseConfig(provider = DatabaseProviders.SQLITE, readConnection = ConnectionDetails(database = "/tmp/test.db"))
+            DatabaseConfig(provider = DatabaseProvider.SQLITE, readConnection = ConnectionDetails(database = "/tmp/test.db"))
                 .readConnectionString(),
         )
 
         assertEquals(
             ":memory:",
-            DatabaseConfig(provider = DatabaseProviders.SQLITE, writeConnection = ConnectionDetails(database = ":memory:"))
+            DatabaseConfig(provider = DatabaseProvider.SQLITE, writeConnection = ConnectionDetails(database = ":memory:"))
                 .writeConnectionString(),
         )
     }
 
     @Test
     fun `driverName maps each provider`() {
-        assertEquals("pgx", DatabaseConfig(provider = DatabaseProviders.POSTGRES).driverName())
-        assertEquals("mysql", DatabaseConfig(provider = DatabaseProviders.MYSQL).driverName())
-        assertEquals("sqlite", DatabaseConfig(provider = DatabaseProviders.SQLITE).driverName())
-        assertEquals("pgx", DatabaseConfig(provider = "unknown").driverName())
+        assertEquals("pgx", DatabaseConfig(provider = DatabaseProvider.POSTGRES).driverName())
+        assertEquals("mysql", DatabaseConfig(provider = DatabaseProvider.MYSQL).driverName())
+        assertEquals("sqlite", DatabaseConfig(provider = DatabaseProvider.SQLITE).driverName())
     }
 }

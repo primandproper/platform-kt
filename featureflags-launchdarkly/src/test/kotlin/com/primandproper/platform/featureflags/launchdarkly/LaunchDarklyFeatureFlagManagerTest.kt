@@ -34,6 +34,8 @@ class LaunchDarklyFeatureFlagManagerTest {
         td.update(td.flag("bool-flag").valueForAll(LDValue.of(true)))
         td.update(td.flag("string-flag").valueForAll(LDValue.of("hello-world")))
         td.update(td.flag("int-flag").valueForAll(LDValue.of(42)))
+        // Beyond the signed 32-bit range: intVariationDetail would silently wrap this.
+        td.update(td.flag("large-int-flag").valueForAll(LDValue.of(3_000_000_000L)))
         td.update(td.flag("float-flag").valueForAll(LDValue.of(3.14)))
         td.update(td.flag("object-flag").valueForAll(LDValue.buildObject().put("key", "value").build()))
 
@@ -108,6 +110,20 @@ class LaunchDarklyFeatureFlagManagerTest {
     fun `getInt64Value returns default when flag not found`() =
         runTest {
             assertEquals(7L, manager.getInt64Value("nonexistent", 7L, evalCtx()))
+        }
+
+    @Test
+    fun `getInt64Value preserves a flag value beyond the Int range`() =
+        runTest {
+            // Before the fix this wrapped through Int to -1294967296.
+            assertEquals(3_000_000_000L, manager.getInt64Value("large-int-flag", 7L, evalCtx()))
+        }
+
+    @Test
+    fun `getInt64Value preserves a default beyond the Int range on miss`() =
+        runTest {
+            // Before the fix defaultValue.toInt() wrapped the out-of-range default before returning it.
+            assertEquals(5_000_000_000L, manager.getInt64Value("nonexistent", 5_000_000_000L, evalCtx()))
         }
 
     @Test

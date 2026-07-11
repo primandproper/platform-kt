@@ -7,7 +7,7 @@ import com.primandproper.platform.ratelimiting.RateLimiter
  * Port of platform-go's `ratelimiting/noop.rateLimiter` — the safe default for wiring, and the
  * fallback the config factory returns for a blank or `noop` provider.
  */
-public class NoopRateLimiter : RateLimiter {
+public object NoopRateLimiter : RateLimiter {
     override suspend fun allow(key: String): Boolean = true
 
     override fun close() {

@@ -12,7 +12,7 @@ import kotlin.test.assertFailsWith
 class EmbedderMockTest {
     private fun embedding() =
         Embedding(
-            vector = listOf(0.1f, 0.2f),
+            vector = floatArrayOf(0.1f, 0.2f),
             sourceText = "hi",
             model = "m",
             provider = "p",

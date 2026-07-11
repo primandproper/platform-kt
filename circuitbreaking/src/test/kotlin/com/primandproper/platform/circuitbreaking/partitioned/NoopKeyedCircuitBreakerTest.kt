@@ -17,9 +17,4 @@ class NoopKeyedCircuitBreakerTest {
             repeat(50) { runCatching { cb.execute { throw RuntimeException("boom") } } }
             assertEquals(CircuitState.CLOSED, cb.state.value)
         }
-
-    @Test
-    fun ensureKeyedCircuitBreakerReturnsNoopForNull() {
-        assertEquals(NoopKeyedCircuitBreaker, ensureKeyedCircuitBreaker(null))
-    }
 }

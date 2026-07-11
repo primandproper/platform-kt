@@ -11,12 +11,15 @@ android {
     compileSdk = libs.versions.compileSdk.get().toInt()
 
     defaultConfig {
-        minSdk = libs.versions.minSdk.get().toInt()
+        // MasterKey / AES-256-GCM keystore-backed SecretKey require API 23 (AndroidKeyStore
+        // AES-256-GCM), above the shared minSdk of 21 — set directly here so the library manifest
+        // merges cleanly.
+        minSdk = 23
     }
 
     compileOptions {
         // opentelemetry-api (via :observability-api) and java.util.Base64 reference java.time /
-        // java.util APIs that need desugaring on minSdk 21.
+        // java.util APIs that still need desugaring.
         isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

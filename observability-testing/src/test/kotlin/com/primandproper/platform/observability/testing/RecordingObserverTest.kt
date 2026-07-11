@@ -2,6 +2,11 @@ package com.primandproper.platform.observability.testing
 
 import com.primandproper.platform.observability.span
 import kotlinx.coroutines.test.runTest
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -63,4 +68,56 @@ class RecordingObserverTest {
             observer.assertObservedInOrder(observedKey("a"), observedKey("b"))
             observer.assertObservedOperationWithValues("b" to 2)
         }
+
+    @Test
+    fun concurrentSetAndStreamDoNotThrow() {
+        // Regression: RecordingOperation's state was unsynchronized, so a set() racing a stream()
+        // read threw ConcurrentModificationException. Hammer one operation from many threads while a
+        // reader repeatedly snapshots the global stream, and assert nothing throws and nothing is lost.
+        val observer = RecordingObserver()
+        val op = observer.begin("concurrent")
+
+        val writers = 8
+        val perWriter = 2000
+        val failures = ConcurrentLinkedQueue<Throwable>()
+        val pool = Executors.newFixedThreadPool(writers + 1)
+        val start = CountDownLatch(1)
+        val done = CountDownLatch(writers)
+        val readerRunning = AtomicBoolean(true)
+
+        pool.submit {
+            start.await()
+            while (readerRunning.get()) {
+                try {
+                    observer.stream()
+                } catch (t: Throwable) {
+                    failures += t
+                }
+            }
+        }
+        repeat(writers) { w ->
+            pool.submit {
+                try {
+                    start.await()
+                    repeat(perWriter) { i -> op.set("k$w-$i", i) }
+                } catch (t: Throwable) {
+                    failures += t
+                } finally {
+                    done.countDown()
+                }
+            }
+        }
+
+        start.countDown()
+        done.await()
+        readerRunning.set(false)
+        pool.shutdown()
+        pool.awaitTermination(10, TimeUnit.SECONDS)
+
+        assertTrue(failures.isEmpty(), "concurrent recording/reading must not throw: ${failures.firstOrNull()}")
+        val recorded = observer.operations.single()
+        // Every set() (unique key) recorded exactly one observation and one value.
+        assertEquals(writers * perWriter, recorded.observations.size)
+        assertEquals(writers * perWriter, recorded.values.size)
+    }
 }

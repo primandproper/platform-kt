@@ -4,8 +4,8 @@ import com.launchdarkly.sdk.EvaluationDetail
 import com.launchdarkly.sdk.EvaluationReason
 import com.launchdarkly.sdk.LDContext
 import com.launchdarkly.sdk.LDValue
+import com.primandproper.platform.circuitbreaking.CircuitBrokenException
 import com.primandproper.platform.circuitbreaking.CircuitState
-import com.primandproper.platform.circuitbreaking.ErrCircuitBroken
 import com.primandproper.platform.circuitbreaking.RecordingCircuitBreaker
 import com.primandproper.platform.featureflags.EvaluationContext
 import com.primandproper.platform.observability.testing.RecordingObserver
@@ -14,6 +14,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 /**
  * Exercises the circuit-breaker wrap added to the LaunchDarkly manager, mirroring the "with broken
@@ -78,7 +79,7 @@ class LaunchDarklyBreakerTest {
             val manager = LaunchDarklyFeatureFlagManager(evaluator, RecordingObserver(), RecordingCircuitBreaker(reject = true))
 
             val error = assertFailsWith<Throwable> { manager.canUseFeature("some-flag", evalCtx()) }
-            assertEquals(ErrCircuitBroken, error)
+            assertTrue(error is CircuitBrokenException)
             assertEquals(0, evaluator.calls)
         }
 

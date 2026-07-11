@@ -3,6 +3,8 @@ package com.primandproper.platform.featureflags.local
 import com.primandproper.platform.featureflags.EvaluationContext
 import com.primandproper.platform.featureflags.FlagAttributes
 import com.primandproper.platform.observability.Keys
+import com.primandproper.platform.observability.Observer
+import com.primandproper.platform.observability.noopObserver
 import com.primandproper.platform.observability.testing.RecordingObserver
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -18,7 +20,7 @@ import kotlin.test.assertTrue
 class InMemoryFeatureFlagManagerTest {
     private fun evalCtx(targetingKey: String = "user123") = EvaluationContext(targetingKey = targetingKey)
 
-    private fun manager(observer: RecordingObserver? = null) =
+    private fun manager(observer: Observer = noopObserver("in_memory_feature_flag_manager")) =
         InMemoryFeatureFlagManager(
             flags =
                 mapOf(

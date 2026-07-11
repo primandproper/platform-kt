@@ -1,7 +1,6 @@
 package com.primandproper.platform.authentication.totp
 
 import com.primandproper.platform.errors.PlatformException
-import com.primandproper.platform.errors.newError
 import com.primandproper.platform.observability.Observer
 import com.primandproper.platform.observability.noopObserver
 import com.primandproper.platform.observability.span
@@ -9,11 +8,11 @@ import java.time.Clock
 
 private const val NAME = "totp"
 
-/** The provided TOTP code did not validate against the secret. Port of platform-go's `totp.ErrInvalidCode`. */
-public val ErrInvalidCode: PlatformException = newError("invalid TOTP code")
+/** Thrown when the provided TOTP code did not validate against the secret. Port of platform-go's `totp.ErrInvalidCode`. */
+public class InvalidCodeException : PlatformException("invalid TOTP code")
 
-/** TOTP is enabled but no code was provided. Port of platform-go's `totp.ErrCodeRequired`. */
-public val ErrCodeRequired: PlatformException = newError("TOTP code required but not provided")
+/** Thrown when TOTP is enabled but no code was provided. Port of platform-go's `totp.ErrCodeRequired`. */
+public class CodeRequiredException : PlatformException("TOTP code required but not provided")
 
 /**
  * Verifies a TOTP code against a shared secret. Port of platform-go's `totp.Verifier`. It is
@@ -22,8 +21,8 @@ public val ErrCodeRequired: PlatformException = newError("TOTP code required but
  */
 public interface Verifier {
     /**
-     * Returns normally if [code] is valid for [secret]. Throws [ErrCodeRequired] if [code] is empty,
-     * and [ErrInvalidCode] if the code does not validate.
+     * Returns normally if [code] is valid for [secret]. Throws [CodeRequiredException] if [code] is empty,
+     * and [InvalidCodeException] if the code does not validate.
      */
     public suspend fun verify(
         secret: String,
@@ -64,8 +63,8 @@ private class TotpVerifier(
             }
 
         when (outcome) {
-            Outcome.CODE_REQUIRED -> throw ErrCodeRequired
-            Outcome.INVALID -> throw ErrInvalidCode
+            Outcome.CODE_REQUIRED -> throw CodeRequiredException()
+            Outcome.INVALID -> throw InvalidCodeException()
             Outcome.OK -> Unit
         }
     }

@@ -21,12 +21,14 @@ class FlowRetryTest {
                     if (collections < 3) error("transient")
                     emit(1)
                     emit(2)
-                }.retryWithPolicy {
-                    maxAttempts = 5
-                    initialDelay = 1.milliseconds
-                    maxDelay = 10.milliseconds
-                    useJitter = false
-                }.toList()
+                }.retryWithPolicy(
+                    RetryConfig(
+                        maxAttempts = 5,
+                        initialDelay = 1.milliseconds,
+                        maxDelay = 10.milliseconds,
+                        useJitter = false,
+                    ),
+                ).toList()
 
             assertEquals(listOf(1, 2), values)
             assertEquals(3, collections)
@@ -41,12 +43,14 @@ class FlowRetryTest {
             flow<Int> {
                 collections++
                 error("transient")
-            }.retryWithPolicy {
-                maxAttempts = 3
-                initialDelay = 1.milliseconds
-                maxDelay = 10.milliseconds
-                useJitter = false
-            }.catch { caught = it }
+            }.retryWithPolicy(
+                RetryConfig(
+                    maxAttempts = 3,
+                    initialDelay = 1.milliseconds,
+                    maxDelay = 10.milliseconds,
+                    useJitter = false,
+                ),
+            ).catch { caught = it }
                 .toList()
 
             assertEquals(3, collections)
@@ -62,10 +66,9 @@ class FlowRetryTest {
             flow<Int> {
                 collections++
                 throw unretryable(IllegalStateException("fatal"))
-            }.retryWithPolicy {
-                maxAttempts = 5
-                initialDelay = 1.milliseconds
-            }.catch { caught = it }
+            }.retryWithPolicy(
+                RetryConfig(maxAttempts = 5, initialDelay = 1.milliseconds),
+            ).catch { caught = it }
                 .toList()
 
             assertEquals(1, collections)

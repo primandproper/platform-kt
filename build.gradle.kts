@@ -14,7 +14,10 @@ plugins {
 // `com.github.primandproper.platform-kt:<module>:<tag>`. Override with `-PpublishGroup=…` for a
 // different repository (e.g. a future Maven Central release under com.primandproper.platform).
 group = (findProperty("publishGroup") as String?) ?: "com.github.primandproper.platform-kt"
-version = "0.1.0-SNAPSHOT"
+// Defaults to a snapshot for local `publishToMavenLocal`; the tag-triggered CI publish job
+// (.github/workflows/publish.yml) passes `-PpublishVersion=<tag>` so the remote artifacts carry the
+// release version. Mirrors the `publishGroup` override above.
+version = (findProperty("publishVersion") as String?) ?: "0.1.0-SNAPSHOT"
 
 // One formatter for the whole tree. ktlintFormat (make fmt) rewrites; ktlintCheck (make lint) and
 // the `check` lifecycle verify. Applied here so every module inherits it without per-module wiring.
@@ -36,6 +39,28 @@ subprojects {
     // component exists by the time we read it: the Android plugin only creates `release` after the
     // module opts a variant into publishing, which it can't do from the root's earlier afterEvaluate.
     apply(plugin = "maven-publish")
+
+    // Remote publish channel for BOTH the JVM and the Android (.aar) modules — the GitHub Packages
+    // Maven repository for this repo. Added only when GitHub credentials are present in the
+    // environment (as they are in the CI publish job), so a local `publishToMavenLocal` needs no
+    // credentials and is unaffected. This is P1-7's recommended path: it leaves JitPack's JVM-only
+    // flow (jitpack.yml) untouched while giving the ten Android modules a real remote channel.
+    extensions.configure<PublishingExtension> {
+        val ghActor = providers.environmentVariable("GITHUB_ACTOR").orNull
+        val ghToken = providers.environmentVariable("GITHUB_TOKEN").orNull
+        if (ghActor != null && ghToken != null) {
+            repositories {
+                maven {
+                    name = "GitHubPackages"
+                    url = uri("https://maven.pkg.github.com/primandproper/platform-kt")
+                    credentials {
+                        username = ghActor
+                        password = ghToken
+                    }
+                }
+            }
+        }
+    }
 
     plugins.withId("com.android.library") {
         extensions.configure<com.android.build.api.dsl.LibraryExtension>("android") {

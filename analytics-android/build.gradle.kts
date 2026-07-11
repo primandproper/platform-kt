@@ -3,14 +3,14 @@ plugins {
     alias(libs.plugins.kotlin.android)
 }
 
-// Real com.android.library: the on-device analytics reporter.
+// Real com.android.library: the on-device analytics reporter. Ships two EventReporter backends:
 //
-// TODO(segment-android): the intended production backend is the Segment Analytics-Kotlin Android SDK
-// (com.segment.analytics.kotlin:android:1.x), which requires a live android.content.Context and an
-// instrumented runtime to deliver events — impractical to exercise in JVM unit tests here. Until that
-// is wired on-device, this module ships a local, bounded, thread-safe buffering reporter that
-// implements the same EventReporter interface and captures events in memory for later flush. The
-// Segment-Kotlin adapter drops in behind the same interface without changing callers.
+//  - SegmentEventReporter, over the Segment Analytics-Kotlin Android SDK (com.segment.analytics.kotlin:
+//    android) — the production delivery backend. It needs a live Context to build the client, so the
+//    Context-touching factory can't run in a JVM unit test; the identity/property-mapping logic behind
+//    it is unit-tested through a captured SegmentClient seam (see the tests), without network delivery.
+//  - BufferingEventReporter — a local, bounded, thread-safe in-memory buffer that implements the same
+//    interface, for offline capture / testing / a pre-write-key stand-in.
 android {
     namespace = "com.primandproper.platform.analytics.android"
     compileSdk = libs.versions.compileSdk.get().toInt()
@@ -39,6 +39,11 @@ kotlin {
 
 dependencies {
     api(project(":analytics-api"))
+
+    // Segment Analytics-Kotlin (Android) — the on-device delivery backend. `implementation`: callers
+    // use the EventReporter interface, never a com.segment type.
+    implementation(libs.segment.analytics.android)
+
     coreLibraryDesugaring(libs.desugar.jdk.libs)
 
     testImplementation(libs.kotlin.test)

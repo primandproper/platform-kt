@@ -1,31 +1,26 @@
 package com.primandproper.platform.search.vector.pgvector
 
-import com.primandproper.platform.errors.ErrInvalidIDProvided
+import com.primandproper.platform.errors.InvalidIDProvidedException
 import com.primandproper.platform.errors.PlatformException
-import com.primandproper.platform.errors.wrapf
+import com.primandproper.platform.errors.wrap
 import com.primandproper.platform.observability.Keys
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.Observer
 import com.primandproper.platform.observability.TracerProvider
 import com.primandproper.platform.observability.span
+import com.primandproper.platform.search.vector.DimensionMismatchException
 import com.primandproper.platform.search.vector.DistanceMetric
-import com.primandproper.platform.search.vector.ErrDimensionMismatch
-import com.primandproper.platform.search.vector.ErrEmptyEmbedding
+import com.primandproper.platform.search.vector.EmptyEmbeddingException
 import com.primandproper.platform.search.vector.Index
+import com.primandproper.platform.search.vector.ProviderFilter
 import com.primandproper.platform.search.vector.QueryRequest
 import com.primandproper.platform.search.vector.QueryResult
 import com.primandproper.platform.search.vector.Vector
 
-/** An index or column name did not meet the bare-identifier constraint. Mirrors Go's `ErrInvalidIdentifier`. */
-public val ErrInvalidIdentifier: PlatformException = PlatformException("identifier must match [A-Za-z_][A-Za-z0-9_]*")
-
-/**
- * [QueryRequest.filter] was a non-null value of a type this provider cannot interpret. Mirrors Go's
- * `ErrInvalidFilter`: the pgvector provider only accepts a `String` SQL fragment, so any other type is
- * rejected rather than silently ignored — a caller that mistakenly passes a structured filter meant for
- * another provider gets a loud error instead of an unfiltered query that could leak rows across tenants.
- */
-public val ErrInvalidFilter: PlatformException = PlatformException("pgvector filter must be a string SQL fragment")
+/** Thrown when an index or column name did not meet the bare-identifier constraint. Mirrors Go's `ErrInvalidIdentifier`. */
+public class InvalidIdentifierException : PlatformException("identifier must match [A-Za-z_][A-Za-z0-9_]*")
 
 /**
  * A pgvector-backed vector [Index]. Port of platform-go's `search/vector/pgvector.indexManager[T]`.
@@ -76,8 +71,8 @@ public class PgvectorIndexManager<T : Any> internal constructor(
         codec: MetadataCodec<T>,
         config: PgvectorConfig,
         indexName: String,
-        logger: Logger? = null,
-        tracerProvider: TracerProvider? = null,
+        logger: Logger = NoopLogger,
+        tracerProvider: TracerProvider = NoopTracerProvider,
     ) : this(
         Observer("${SERVICE_NAME}_$indexName", logger, tracerProvider),
         executor,
@@ -134,10 +129,10 @@ public class PgvectorIndexManager<T : Any> internal constructor(
             // transaction we then have to roll back.
             val rows =
                 vectors.map { v ->
-                    if (v.id.isEmpty()) throw ErrInvalidIDProvided
-                    if (v.embedding.isEmpty()) throw ErrEmptyEmbedding
+                    if (v.id.isEmpty()) throw InvalidIDProvidedException()
+                    if (v.embedding.isEmpty()) throw EmptyEmbeddingException()
                     if (v.embedding.size != dimension) {
-                        throw wrapf(ErrDimensionMismatch, "got %d, want %d", v.embedding.size, dimension)!!
+                        throw wrap(DimensionMismatchException(), "got ${v.embedding.size}, want $dimension")
                     }
                     listOf(v.id, encodeVector(v.embedding), codec.encode(v.metadata))
                 }
@@ -183,9 +178,9 @@ public class PgvectorIndexManager<T : Any> internal constructor(
         o11y.span("Query") {
             set(INDEX_NAME_KEY, indexName)
 
-            if (request.embedding.isEmpty()) throw ErrEmptyEmbedding
+            if (request.embedding.isEmpty()) throw EmptyEmbeddingException()
             if (request.embedding.size != dimension) {
-                throw wrapf(ErrDimensionMismatch, "got %d, want %d", request.embedding.size, dimension)!!
+                throw wrap(DimensionMismatchException(), "got ${request.embedding.size}, want $dimension")
             }
             val topK = if (request.topK <= 0) 10 else request.topK
             set(TOP_K_KEY, topK)
@@ -209,28 +204,32 @@ public class PgvectorIndexManager<T : Any> internal constructor(
         }
 
     /**
-     * Builds the optional WHERE clause from an opaque [filter]. `null` yields no clause; a non-blank
-     * `String` is appended verbatim; any other type is rejected with [ErrInvalidFilter].
+     * Builds the optional WHERE clause from an opaque [filter]. `null` yields no clause; a
+     * [ProviderFilter.RawFilter] whose trimmed `expression` is non-blank is appended verbatim (a
+     * blank expression yields no clause). The filter type is sealed, so there is no
+     * unknown-type arm to reject — the exhaustive `when` covers every variant.
      *
-     * SECURITY: a string filter is concatenated verbatim into the WHERE clause — it is raw,
+     * SECURITY: a raw filter is concatenated verbatim into the WHERE clause — it is raw,
      * unparameterized SQL. It is a trusted, caller-supplied fragment, NEVER end-user input; callers
      * MUST sanitize anything they interpolate (including tenant scoping). This mirrors Go's documented
      * filter contract; a parameterized builder is intentionally not used because the shared
      * [QueryRequest] carries no args slice.
      */
-    private fun whereClause(filter: Any?): String {
-        if (filter == null) return ""
-        if (filter !is String) throw wrapf(ErrInvalidFilter, "got %s", filter::class.simpleName ?: "unknown")!!
-        val trimmed = filter.trim()
-        return if (trimmed.isEmpty()) "" else " WHERE $trimmed"
-    }
+    private fun whereClause(filter: ProviderFilter?): String =
+        when (filter) {
+            null -> ""
+            is ProviderFilter.RawFilter -> {
+                val trimmed = filter.expression.trim()
+                if (trimmed.isEmpty()) "" else " WHERE $trimmed"
+            }
+        }
 
     private fun requireIdentifier(
         value: String,
         label: String,
     ): String {
         if (!SAFE_IDENTIFIER.matches(value)) {
-            throw wrapf(ErrInvalidIdentifier, "%s %s", label, value)!!
+            throw wrap(InvalidIdentifierException(), "$label $value")
         }
         return value
     }

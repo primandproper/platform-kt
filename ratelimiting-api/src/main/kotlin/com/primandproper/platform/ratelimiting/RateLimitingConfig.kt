@@ -31,10 +31,15 @@ public enum class RateLimitingProvider(
  * `ratelimitingcfg.Config`: the chosen [provider] and the token-bucket budget ([requestsPerSec],
  * [burstSize]).
  *
- * The Redis connection settings (`redis.Config`) and the `provideRateLimiter` factory that unites all
+ * The Redis connection settings (`redis.Config`) and the `RateLimiter` factory that unites all
  * three backends live with the server backend in `:ratelimiting-redis`, so this API module stays
  * pure-JVM and free of any backend dependency — matching how Go's `ratelimiting/config` package sits
  * above `ratelimiting`, `ratelimiting/noop`, and `ratelimiting/redis`.
+ *
+ * The defaults (`10.0` rps, a burst of `20`) are applied at construction via the default arguments —
+ * the analog of Go's `EnsureDefaults` filling a field left at its zero value — and the budget is
+ * validated in [init] (Go's `validation.Min(0.0)` / `validation.Min(0)`), so a constructed config is
+ * always defaulted and valid.
  *
  * @param provider which backend to build; defaults to [RateLimitingProvider.NOOP].
  * @param requestsPerSec the steady refill rate applied by the memory/redis backends.
@@ -45,21 +50,7 @@ public data class RateLimitingConfig(
     val requestsPerSec: Double = DEFAULT_REQUESTS_PER_SEC,
     val burstSize: Int = DEFAULT_BURST_SIZE,
 ) {
-    /**
-     * Returns a copy with zero fields replaced by their defaults — the analog of Go's
-     * `EnsureDefaults`, which only fills a field left at its zero value (`10.0` rps, a burst of `20`).
-     */
-    public fun ensureDefaults(): RateLimitingConfig =
-        copy(
-            requestsPerSec = if (requestsPerSec == 0.0) DEFAULT_REQUESTS_PER_SEC else requestsPerSec,
-            burstSize = if (burstSize == 0) DEFAULT_BURST_SIZE else burstSize,
-        )
-
-    /**
-     * Validates the budget, throwing [IllegalArgumentException] for a negative rate or burst — the
-     * analog of Go's `validation.Min(0.0)` / `validation.Min(0)`.
-     */
-    public fun validate() {
+    init {
         require(requestsPerSec >= 0.0) { "requestsPerSec must be >= 0, got $requestsPerSec" }
         require(burstSize >= 0) { "burstSize must be >= 0, got $burstSize" }
     }

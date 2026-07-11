@@ -1,7 +1,7 @@
 package com.primandproper.platform.email.resend
 
 import com.primandproper.platform.circuitbreaking.CircuitBreaker
-import com.primandproper.platform.circuitbreaking.ensureCircuitBreaker
+import com.primandproper.platform.circuitbreaking.NoopCircuitBreaker
 import com.primandproper.platform.email.EmailKeys
 import com.primandproper.platform.email.Emailer
 import com.primandproper.platform.email.OutboundEmailMessage
@@ -9,6 +9,8 @@ import com.primandproper.platform.httpclient.HttpClient
 import com.primandproper.platform.httpclient.HttpMethod
 import com.primandproper.platform.httpclient.HttpRequest
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.Observer
 import com.primandproper.platform.observability.TracerProvider
 import com.primandproper.platform.observability.span
@@ -155,15 +157,15 @@ public fun ResendEmailer(
     apiToken: String,
     httpClient: HttpClient,
     baseUrl: String = ResendConfig.DEFAULT_BASE_URL,
-    logger: Logger? = null,
-    tracerProvider: TracerProvider? = null,
-    circuitBreaker: CircuitBreaker? = null,
+    logger: Logger = NoopLogger,
+    tracerProvider: TracerProvider = NoopTracerProvider,
+    circuitBreaker: CircuitBreaker = NoopCircuitBreaker,
 ): ResendEmailer {
     if (apiToken.isEmpty()) throw EmptyApiTokenException()
     return ResendEmailer(
         o11y = Observer(NAME, logger, tracerProvider),
         httpClient = httpClient,
-        circuitBreaker = ensureCircuitBreaker(circuitBreaker),
+        circuitBreaker = circuitBreaker,
         apiToken = apiToken,
         sendUrl = baseUrl.trimEnd('/') + "/emails",
     )
@@ -173,9 +175,9 @@ public fun ResendEmailer(
 public fun ResendEmailer(
     config: ResendConfig,
     httpClient: HttpClient,
-    logger: Logger? = null,
-    tracerProvider: TracerProvider? = null,
-    circuitBreaker: CircuitBreaker? = null,
+    logger: Logger = NoopLogger,
+    tracerProvider: TracerProvider = NoopTracerProvider,
+    circuitBreaker: CircuitBreaker = NoopCircuitBreaker,
 ): ResendEmailer {
     config.validate()
     return ResendEmailer(

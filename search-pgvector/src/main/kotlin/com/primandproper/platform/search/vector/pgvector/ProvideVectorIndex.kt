@@ -1,6 +1,8 @@
 package com.primandproper.platform.search.vector.pgvector
 
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.TracerProvider
 import com.primandproper.platform.search.vector.Index
 import com.primandproper.platform.search.vector.config.VectorSearchConfig
@@ -40,8 +42,8 @@ public suspend fun <T : Any> provideVectorIndex(
     indexName: String,
     pgvectorConfig: PgvectorConfig? = null,
     executor: PgvectorExecutor? = null,
-    logger: Logger? = null,
-    tracerProvider: TracerProvider? = null,
+    logger: Logger = NoopLogger,
+    tracerProvider: TracerProvider = NoopTracerProvider,
 ): Index<T> =
     when (config.provider) {
         VectorSearchProvider.PGVECTOR -> {

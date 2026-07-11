@@ -3,6 +3,7 @@ package com.primandproper.platform.cookies
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 /**
  * The `SameSite` policy of a cookie. Port of the `SameSiteLax`/`SameSiteStrict`/`SameSiteNone`
@@ -58,6 +59,10 @@ public data class Cookie(
      * `http.Cookie.String()` emits: `name=value` then `Path`, `Domain`, `Expires`, `Max-Age`,
      * `HttpOnly`, `Secure`, `SameSite`. Empty [path]/[domain] and a null [expires]/[maxAge] are
      * omitted.
+     *
+     * `Max-Age` mirrors Go's `http.Cookie` sentinel semantics: a zero value is treated as "unset"
+     * and the attribute is omitted; a negative value emits `Max-Age=0` (delete now); a positive
+     * value emits the count of seconds.
      */
     public fun serialize(): String {
         val sb = StringBuilder()
@@ -65,7 +70,14 @@ public data class Cookie(
         if (path.isNotEmpty()) sb.append("; Path=").append(path)
         if (domain.isNotEmpty()) sb.append("; Domain=").append(domain)
         expires?.let { sb.append("; Expires=").append(HTTP_DATE.format(it.atOffset(ZoneOffset.UTC))) }
-        maxAge?.let { sb.append("; Max-Age=").append(if (it > 0) it else 0) }
+        maxAge?.let {
+            when {
+                it > 0 -> sb.append("; Max-Age=").append(it)
+                it < 0 -> sb.append("; Max-Age=0")
+                // it == 0: Go omits the attribute entirely (0 means "unset"), so emit nothing.
+                else -> Unit
+            }
+        }
         if (httpOnly) sb.append("; HttpOnly")
         if (secure) sb.append("; Secure")
         sb.append("; SameSite=").append(sameSite.headerValue)
@@ -73,6 +85,10 @@ public data class Cookie(
     }
 
     private companion object {
-        private val HTTP_DATE: DateTimeFormatter = DateTimeFormatter.RFC_1123_DATE_TIME
+        // IMF-fixdate, matching Go's http.TimeFormat ("Mon, 02 Jan 2006 15:04:05 GMT"): a fixed-width,
+        // zero-padded 2-digit day. RFC_1123_DATE_TIME uses a variable-width day, which renders the 1st
+        // through 9th as a single digit and trips strict RFC 7231 parsers.
+        private val HTTP_DATE: DateTimeFormatter =
+            DateTimeFormatter.ofPattern("EEE, dd MMM yyyy HH:mm:ss 'GMT'", Locale.US)
     }
 }

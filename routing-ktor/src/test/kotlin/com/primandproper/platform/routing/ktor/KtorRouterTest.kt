@@ -4,6 +4,7 @@ import com.primandproper.platform.observability.noopObserver
 import com.primandproper.platform.observability.testing.RecordingObserver
 import com.primandproper.platform.routing.DefaultRouteParamManager
 import com.primandproper.platform.routing.HttpHandler
+import com.primandproper.platform.routing.HttpMethod
 import com.primandproper.platform.routing.Middleware
 import com.primandproper.platform.routing.Route
 import com.primandproper.platform.routing.RouterSettings
@@ -72,7 +73,7 @@ class KtorRouterTest {
 
             val r = router()
             r.addRoute(
-                "GET",
+                HttpMethod.GET,
                 "/wrapped",
                 HttpHandler { call ->
                     order += "handler"
@@ -96,7 +97,7 @@ class KtorRouterTest {
             application { r.install(this) }
 
             assertEquals("up", client.get("/api/health").bodyAsText())
-            assertTrue(r.routes().contains(Route("GET", "/api/health")))
+            assertTrue(r.routes().contains(Route(HttpMethod.GET, "/api/health")))
         }
 
     @Test
@@ -132,7 +133,7 @@ class KtorRouterTest {
     fun `handle matches any method`() =
         testApplication {
             val r = router()
-            r.handle("/any") { call -> call.respondText(200, call.method) }
+            r.handle("/any") { call -> call.respondText(200, call.method.name) }
             application { r.install(this) }
 
             assertEquals("GET", client.get("/any").bodyAsText())
@@ -166,6 +167,39 @@ class KtorRouterTest {
             client.get("/observed")
 
             recording.assertObservedOperationWithValues("http.method" to "GET", "http.path" to "/observed")
+        }
+
+    @Test
+    fun `records the response status code on the request span`() =
+        testApplication {
+            val recording = RecordingObserver()
+            val r = router(recording)
+            r.get("/observed") { call -> call.respondStatus(204) }
+            application { r.install(this) }
+
+            client.get("/observed")
+
+            val op = recording.operations.first { it.values["http.path"] == "/observed" }
+            assertEquals(204, op.values["http.status_code"])
+        }
+
+    @Test
+    fun `records the status code for a non-throwing 5xx without recording an exception`() =
+        testApplication {
+            val recording = RecordingObserver()
+            val r = router(recording)
+            // The handler *returns* a 5xx rather than throwing, so nothing goes through acknowledge.
+            r.get("/degraded") { call -> call.respondStatus(503) }
+            application { r.install(this) }
+
+            val resp = client.get("/degraded")
+
+            assertEquals(503, resp.status.value)
+            val op = recording.operations.first { it.values["http.path"] == "/degraded" }
+            assertEquals(503, op.values["http.status_code"])
+            // The span is marked ERROR via setStatus (not acknowledge), so no exception is recorded.
+            assertTrue(op.errors.isEmpty(), "a returned 5xx is not an exception")
+            assertTrue(op.ended)
         }
 
     @Test

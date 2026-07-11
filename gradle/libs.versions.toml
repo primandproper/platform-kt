@@ -18,6 +18,12 @@ otelInstrumentation = "2.12.0-alpha"
 compileSdk = "35"
 minSdk = "21"
 
+# Vendor Android backends (on-device SDKs behind the platform interfaces; resolved from
+# google() [firebase] and mavenCentral() [launchdarkly, segment]).
+firebaseMessaging = "24.1.1"
+launchdarklyAndroid = "5.7.0"
+segmentKotlin = "1.19.1"
+
 [libraries]
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
 kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
@@ -48,6 +54,11 @@ ktor-client-mock = { module = "io.ktor:ktor-client-mock", version.ref = "ktor" }
 koin-core = { module = "io.insert-koin:koin-core", version.ref = "koin" }
 
 desugar-jdk-libs = { module = "com.android.tools:desugar_jdk_libs", version.ref = "desugar" }
+
+# Vendor Android backends for the on-device modules (see P2-30).
+firebase-messaging = { module = "com.google.firebase:firebase-messaging", version.ref = "firebaseMessaging" }
+launchdarkly-android = { module = "com.launchdarkly:launchdarkly-android-client-sdk", version.ref = "launchdarklyAndroid" }
+segment-analytics-android = { module = "com.segment.analytics.kotlin:android", version.ref = "segmentKotlin" }
 
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }

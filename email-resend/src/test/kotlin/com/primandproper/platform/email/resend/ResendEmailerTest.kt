@@ -1,7 +1,7 @@
 package com.primandproper.platform.email.resend
 
 import com.primandproper.platform.circuitbreaking.CircuitBreaker
-import com.primandproper.platform.circuitbreaking.ErrCircuitBroken
+import com.primandproper.platform.circuitbreaking.CircuitBrokenException
 import com.primandproper.platform.circuitbreaking.NoopCircuitBreaker
 import com.primandproper.platform.circuitbreaking.RecordingCircuitBreaker
 import com.primandproper.platform.email.EmailKeys
@@ -188,7 +188,7 @@ class ResendEmailerTest {
             val (emailer, _, fake) = recording(breaker = breaker)
 
             val error = assertFailsWith<Throwable> { emailer.sendEmail(message()) }
-            assertEquals(ErrCircuitBroken, error)
+            assertTrue(error is CircuitBrokenException)
             assertTrue(fake.requests.isEmpty())
             assertEquals(1, breaker.rejectionCount)
         }

@@ -30,12 +30,38 @@ class ProvideCacheTest {
     }
 
     @Test
-    fun `redis provider with cluster addresses builds a redis cache`() {
+    fun `redis provider with cluster addresses is rejected until a cluster adapter lands`() {
+        // The default standalone LettuceRedisClient cannot follow cluster redirects, so a multi-address
+        // (cluster) config must fail loudly rather than silently pin to the first seed address.
+        assertFailsWith<UnsupportedClusterConfigException> {
+            provideCache(
+                config = CacheConfig(CacheProvider.REDIS),
+                codec = StringCacheCodec,
+                redisConfig = RedisCacheConfig(listOf("localhost:6379", "localhost:6380")),
+            )
+        }
+    }
+
+    @Test
+    fun `redis provider with the cluster flag is rejected`() {
+        assertFailsWith<UnsupportedClusterConfigException> {
+            provideCache(
+                config = CacheConfig(CacheProvider.REDIS),
+                codec = StringCacheCodec,
+                redisConfig = RedisCacheConfig(listOf("localhost:6379"), cluster = true),
+            )
+        }
+    }
+
+    @Test
+    fun `cluster config with an injected client is allowed`() {
+        // An injected (cluster-aware) client is the escape hatch; only the standalone client is rejected.
         val c =
             provideCache(
                 config = CacheConfig(CacheProvider.REDIS),
                 codec = StringCacheCodec,
                 redisConfig = RedisCacheConfig(listOf("localhost:6379", "localhost:6380")),
+                redisClient = FakeRedisClient(),
             )
         assertTrue(c is RedisCache<String>)
     }

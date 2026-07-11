@@ -7,9 +7,9 @@ package com.primandproper.platform.search.text
  *
  * Go can lean on `encoding/json` for any type; Kotlin has no universal, reflection-free JSON encoder
  * on the pure-JVM classpath, so — as with `cache.CacheCodec` — the codec is injected and the caller
- * chooses the mechanism (kotlinx.serialization, Jackson, Gson, …). [encode] takes `Any` because
- * [IndexManager.index] is untyped in the document, while [decode] produces the typed `T` that
- * [IndexSearcher.search] returns.
+ * chooses the mechanism (kotlinx.serialization, Jackson, Gson, …). [encode] takes `Any` so a single
+ * codec can serialize a document without being re-parameterized at the backend boundary, while
+ * [decode] produces the typed `T` that [IndexSearcher.search] returns.
  */
 public interface DocumentCodec<T : Any> {
     /** Encodes an indexable [value] into the JSON document body sent to the backend. */

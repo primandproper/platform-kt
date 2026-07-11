@@ -7,6 +7,8 @@ plugins {
 // kotlinx-coroutines-core is an `api` dependency (it appears in the public `Policy` signature).
 dependencies {
     api(libs.kotlinx.coroutines.core)
+    // An optional Logger appears in the public policy/flow signatures, so :observability-api is `api`.
+    api(project(":observability-api"))
 
     testImplementation(libs.kotlin.test)
     testImplementation(libs.kotlinx.coroutines.test)

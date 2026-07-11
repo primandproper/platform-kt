@@ -8,7 +8,7 @@ import com.launchdarkly.sdk.LDValueType
 import com.launchdarkly.sdk.server.LDClient
 import com.launchdarkly.sdk.server.LDConfig
 import com.primandproper.platform.circuitbreaking.CircuitBreaker
-import com.primandproper.platform.circuitbreaking.ensureCircuitBreaker
+import com.primandproper.platform.circuitbreaking.NoopCircuitBreaker
 import com.primandproper.platform.featureflags.EvaluationContext
 import com.primandproper.platform.featureflags.FeatureFlagManager
 import com.primandproper.platform.featureflags.FlagAttributes
@@ -31,6 +31,17 @@ public class FeatureFlagEvaluationException(
     feature: String,
     reason: EvaluationReason,
 ) : RuntimeException("error evaluating flag \"$feature\": ${reason.errorKind ?: reason.kind}")
+
+/**
+ * Raised (and recorded on the observability span) when an Int64 flag evaluation resolves to a numeric
+ * value that cannot be represented as a [Long] — a non-finite value, or one outside the Long range.
+ * The caller receives the supplied default, matching the miss-fallback behavior of the other
+ * accessors, rather than a silently wrapped number.
+ */
+public class FeatureFlagInt64RangeException(
+    feature: String,
+    value: Double,
+) : RuntimeException("flag \"$feature\" resolved to $value, which is not a representable Int64")
 
 /**
  * The seam through which the manager performs a LaunchDarkly variation evaluation. Production wires it
@@ -133,10 +144,10 @@ private class LDClientEvaluator(private val client: LDClient) : FlagEvaluator {
  */
 public class LaunchDarklyFeatureFlagManager internal constructor(
     private val evaluator: FlagEvaluator,
-    observer: Observer?,
+    observer: Observer = noopObserver(SERVICE_NAME),
     private val circuitBreaker: CircuitBreaker,
 ) : FeatureFlagManager {
-    private val o11y: Observer = observer ?: noopObserver(SERVICE_NAME)
+    private val o11y: Observer = observer
 
     /**
      * Builds a manager over a live [client].
@@ -146,9 +157,9 @@ public class LaunchDarklyFeatureFlagManager internal constructor(
      */
     public constructor(
         client: LDClient,
-        observer: Observer? = null,
-        circuitBreaker: CircuitBreaker? = null,
-    ) : this(LDClientEvaluator(client), observer, ensureCircuitBreaker(circuitBreaker))
+        observer: Observer = noopObserver(SERVICE_NAME),
+        circuitBreaker: CircuitBreaker = NoopCircuitBreaker,
+    ) : this(LDClientEvaluator(client), observer, circuitBreaker)
 
     override suspend fun canUseFeature(
         feature: String,
@@ -199,15 +210,25 @@ public class LaunchDarklyFeatureFlagManager internal constructor(
     ): Long =
         o11y.span("getInt64Value") {
             set(Keys.USER_ID to evalCtx.targetingKey, FlagAttributes.FEATURE to feature)
+            // LaunchDarkly stores every numeric flag value as a JSON double, and the SDK's
+            // intVariationDetail funnels both the default and the result through Int — silently
+            // wrapping any value outside the 32-bit range. Widen through doubleVariationDetail
+            // instead, then narrow back to Long, so the full Int64 range survives the round trip.
             val detail =
                 circuitBreaker.execute {
-                    withContext(Dispatchers.IO) { evaluator.intDetail(feature, toLDContext(evalCtx), defaultValue.toInt()) }
+                    withContext(Dispatchers.IO) { evaluator.doubleDetail(feature, toLDContext(evalCtx), defaultValue.toDouble()) }
                 }
             if (detail.reason.isError()) {
                 acknowledge(FeatureFlagEvaluationException(feature, detail.reason), "checking feature flag int variation")
                 return@span defaultValue
             }
-            val result = detail.value.toLong()
+            val result = detail.value.toInt64OrNull()
+            if (result == null) {
+                // A resolved value that is not a finite integer within the Long range cannot be
+                // represented; surface it and fall back to the caller's default rather than lie.
+                acknowledge(FeatureFlagInt64RangeException(feature, detail.value), "checking feature flag int variation")
+                return@span defaultValue
+            }
             set(FlagAttributes.FLAG_DEFAULT to defaultValue, FlagAttributes.FLAG_VALUE to result)
             result
         }
@@ -272,8 +293,8 @@ public class LaunchDarklyFeatureFlagManager internal constructor(
  */
 public fun launchDarklyFeatureFlagManager(
     config: LaunchDarklyConfig,
-    observer: Observer? = null,
-    circuitBreaker: CircuitBreaker? = null,
+    observer: Observer = noopObserver(SERVICE_NAME),
+    circuitBreaker: CircuitBreaker = NoopCircuitBreaker,
     configure: LDConfig.Builder.() -> Unit = {},
 ): LaunchDarklyFeatureFlagManager {
     require(config.sdkKey.isNotBlank()) { "missing SDK key" }
@@ -282,6 +303,20 @@ public fun launchDarklyFeatureFlagManager(
 }
 
 private fun EvaluationReason.isError(): Boolean = kind == EvaluationReason.Kind.ERROR
+
+/**
+ * Narrows a LaunchDarkly numeric flag value (always a JSON double under the hood) back to a [Long]
+ * without the silent Int wraparound of `intVariationDetail`. Returns `null` when the value is not a
+ * finite number that lands within the Long range, so the caller can fall back to the default.
+ * `Long.MAX_VALUE` is not exactly representable as a double (it rounds up to 2^63), so the upper
+ * bound is strict.
+ */
+internal fun Double.toInt64OrNull(): Long? =
+    if (isFinite() && this >= Long.MIN_VALUE.toDouble() && this < Long.MAX_VALUE.toDouble()) {
+        toLong()
+    } else {
+        null
+    }
 
 /**
  * Converts a platform-owned [EvaluationContext] into a LaunchDarkly [LDContext]. The only crossing

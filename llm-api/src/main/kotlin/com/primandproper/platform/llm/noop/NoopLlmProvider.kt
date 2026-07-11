@@ -9,6 +9,6 @@ import com.primandproper.platform.llm.LlmProvider
  * platform-go's `llm/noop.Provider`. The safe default the config factory falls back to when no
  * provider is selected, and for tests that don't call a real model.
  */
-public class NoopLlmProvider : LlmProvider {
+public object NoopLlmProvider : LlmProvider {
     override suspend fun complete(params: CompletionParams): CompletionResult = CompletionResult()
 }

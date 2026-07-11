@@ -28,17 +28,22 @@ class EmailConfigTest {
     }
 
     @Test
-    fun `validate accepts a known provider`() {
-        EmailConfig(provider = "resend").validate()
+    fun `fromConfigValue resolves a known provider`() {
+        assertEquals(EmailProvider.RESEND, EmailProvider.fromConfigValue("resend"))
     }
 
     @Test
-    fun `validate rejects an unknown provider`() {
-        assertFailsWith<InvalidEmailProviderException> { EmailConfig(provider = "sendgird").validate() }
+    fun `fromConfigValue rejects an unknown provider`() {
+        assertFailsWith<InvalidEmailProviderException> { EmailProvider.fromConfigValue("sendgird") }
     }
 
     @Test
-    fun `empty provider is permitted for noop fallback`() {
-        EmailConfig(provider = "").validate()
+    fun `fromConfigValue maps a blank provider to null for the noop fallback`() {
+        assertNull(EmailProvider.fromConfigValue(""))
+    }
+
+    @Test
+    fun `a null provider config selects the noop emailer`() {
+        assertNull(EmailConfig().provider)
     }
 }

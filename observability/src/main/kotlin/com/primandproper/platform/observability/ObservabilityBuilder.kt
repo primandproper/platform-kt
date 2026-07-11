@@ -32,7 +32,8 @@ public fun Observability(configure: ObservabilityConfig.() -> Unit): Observabili
             TracingProvider.OTEL ->
                 OtelTracerProvider.create(
                     serviceName = cfg.serviceName,
-                    endpoint = cfg.tracing.endpoint,
+                    // Non-null here: cfg.validate() above requires a non-blank endpoint for the OTEL provider.
+                    endpoint = checkNotNull(cfg.tracing.endpoint),
                     sampleRatio = cfg.tracing.sampleRatio,
                     useHttp = cfg.tracing.useHttp,
                 )

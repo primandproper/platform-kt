@@ -13,8 +13,8 @@ package com.primandproper.platform.routing
  * is abstracted behind [pathParameter], so the numeric-parsing logic is framework-independent.
  */
 public interface RoutingRequest {
-    /** The request's HTTP method (uppercased verb, e.g. `"GET"`). */
-    public val method: String
+    /** The request's HTTP method (e.g. [HttpMethod.GET]). */
+    public val method: HttpMethod
 
     /** The request path, without query string (e.g. `"/things/123"`). */
     public val path: String

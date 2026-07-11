@@ -2,10 +2,13 @@ package com.primandproper.platform.ratelimiting
 
 import com.primandproper.platform.observability.Keys
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.Observer
 import com.primandproper.platform.observability.TracerProvider
 import com.primandproper.platform.observability.span
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.time.TimeSource
 
 /**
  * A per-key, in-memory token-bucket [RateLimiter]. Port of platform-go's `inMemoryRateLimiter`.
@@ -28,7 +31,7 @@ public class InMemoryRateLimiter internal constructor(
     private val o11y: Observer,
     private val requestsPerSec: Double,
     private val burstSize: Int,
-    private val clock: () -> Long,
+    private val timeSource: TimeSource = TimeSource.Monotonic,
 ) : RateLimiter {
     /**
      * @param logger optional root logger; defaults to a noop logger, matching platform-go's
@@ -38,9 +41,9 @@ public class InMemoryRateLimiter internal constructor(
     public constructor(
         requestsPerSec: Double,
         burstSize: Int,
-        logger: Logger? = null,
-        tracerProvider: TracerProvider? = null,
-    ) : this(Observer(NAME, logger, tracerProvider), requestsPerSec, burstSize, System::nanoTime)
+        logger: Logger = NoopLogger,
+        tracerProvider: TracerProvider = NoopTracerProvider,
+    ) : this(Observer(NAME, logger, tracerProvider), requestsPerSec, burstSize, TimeSource.Monotonic)
 
     // Exposed to same-module tests so they can assert per-key bucket count, mirroring the Go tests
     // ranging over `inMemoryRateLimiter.limiters`.
@@ -49,14 +52,17 @@ public class InMemoryRateLimiter internal constructor(
     override suspend fun allow(key: String): Boolean =
         o11y.span("Allow") {
             set(Keys.NAME, key)
-            val allowed = getOrCreateLimiter(key).allow(clock())
+            val allowed = getOrCreateLimiter(key).allow()
             // TODO(metrics): Go adds 1 to allowedCounter/rejectedCounter here; recorded on the span
             // for now (see the module note on the missing metrics pillar).
             set(ALLOWED, allowed)
             allowed
         }
 
-    private fun getOrCreateLimiter(key: String): TokenBucket = limiters.computeIfAbsent(key) { TokenBucket(requestsPerSec, burstSize) }
+    private fun getOrCreateLimiter(key: String): TokenBucket =
+        limiters.computeIfAbsent(key) {
+            TokenBucket(requestsPerSec, burstSize, timeSource)
+        }
 
     override fun close() {
         limiters.clear()

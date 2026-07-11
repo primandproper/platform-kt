@@ -9,43 +9,32 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeMark
 import kotlin.time.TimeSource
 
 /**
- * Builds a [CircuitBreaker] from [config] — the analog of `Config.ProvideCircuitBreaker`. The config
- * is copied and defaulted at construction ([CircuitBreakerConfig.ensureDefaults]), then validated;
- * an *invalid* config degrades to [NoopCircuitBreaker] (logging the reason) exactly like the Go
- * provider, which returns a noop rather than failing the whole wiring.
+ * Builds a [CircuitBreaker] from [config] — the analog of `Config.ProvideCircuitBreaker`. [config] is
+ * an immutable value already defaulted and validated at its own construction (an *invalid* config
+ * **throws** [IllegalArgumentException] there rather than silently degrading to a noop, honoring the
+ * README's "misconfiguration fails loudly at startup, not silently at first use" contract, mirroring
+ * `SecretsConfig.SecretSource`). Build one with named arguments, e.g.
+ * `CircuitBreaker(CircuitBreakerConfig(name = "svc", failureThreshold = 5))`. A caller that genuinely
+ * wants no protection opts in explicitly via [NoopCircuitBreaker].
  *
  * [observer] logs state transitions and degrades to a noop observer when absent, mirroring how the
  * rest of this port binds to `observability-api`.
  */
 public fun CircuitBreaker(
     config: CircuitBreakerConfig,
-    observer: Observer? = null,
-): CircuitBreaker {
-    val normalized = config.copy().apply { ensureDefaults() }
-    val obs = observer ?: noopObserver(normalized.name)
-    return try {
-        normalized.validate()
-        RealCircuitBreaker(normalized, obs, partition = null, timeSource = TimeSource.Monotonic)
-    } catch (e: IllegalArgumentException) {
-        obs.logger.error("invalid circuit breaker config, providing noop circuit breaker", e)
-        NoopCircuitBreaker
-    }
-}
-
-/** Builds a [CircuitBreaker] from an inline config block: `CircuitBreaker { failureThreshold = 5 }`. */
-public fun CircuitBreaker(
-    observer: Observer? = null,
-    configure: CircuitBreakerConfig.() -> Unit,
-): CircuitBreaker = CircuitBreaker(CircuitBreakerConfig().apply(configure), observer)
+    observer: Observer = noopObserver(config.name),
+): CircuitBreaker = RealCircuitBreaker(config, observer, partition = null, timeSource = TimeSource.Monotonic)
 
 /**
  * Internal shared constructor used by both the public factory and the partitioned builder. [partition]
  * is logged (and is the seam where a per-partition metric attribute reattaches once metrics land);
- * [config] is assumed already copied, defaulted, and validated.
+ * [config] is assumed already defaulted and validated.
  */
 internal fun realCircuitBreaker(
     config: CircuitBreakerConfig,
@@ -82,11 +71,16 @@ internal class RealCircuitBreaker(
     private var successesInHalfOpen: Int = 0
     private var openMark: TimeMark? = null
 
+    // Guarded by [mutex]. Rate-limits the rejection log so a storm of rejections in a single open
+    // window leaves a signal without flooding the logs.
+    private var rejectionsSinceLog: Long = 0
+    private var lastRejectionLogMark: TimeMark? = null
+
     /** How a call was admitted, so the outcome is accounted against the right state. */
     private enum class Admission { NORMAL, PROBE }
 
     override suspend fun <T> execute(block: suspend () -> T): T {
-        val admission = admit() // throws ErrCircuitBroken when the call is rejected
+        val admission = admit() // throws CircuitBrokenException when the call is rejected
         return try {
             val result = block()
             onSuccess(admission)
@@ -116,7 +110,7 @@ internal class RealCircuitBreaker(
                         probesInFlight = 1
                         Admission.PROBE
                     } else {
-                        throw ErrCircuitBroken
+                        reject(CircuitState.OPEN)
                     }
                 }
 
@@ -126,11 +120,33 @@ internal class RealCircuitBreaker(
                         Admission.PROBE
                     } else {
                         // Probe budget exhausted; keep rejecting until an in-flight probe resolves.
-                        throw ErrCircuitBroken
+                        reject(CircuitState.HALF_OPEN)
                     }
                 }
             }
         }
+
+    /**
+     * Records a rejection and throws [CircuitBrokenException]. Emits a rate-limited warning — at most
+     * one line per [REJECTION_LOG_INTERVAL], carrying the count suppressed since the last line — so a
+     * flood of rejections in an open window leaves a signal (state transitions log, but individual
+     * rejections otherwise would not) without drowning the logs. Called under [mutex], so the counters
+     * need no extra synchronization and the check stays cheap on the hot path. The breaker
+     * name/partition ride along via [log]'s bound context.
+     */
+    private fun reject(rejectedIn: CircuitState): Nothing {
+        rejectionsSinceLog++
+        val since = lastRejectionLogMark
+        if (since == null || since.elapsedNow() >= REJECTION_LOG_INTERVAL) {
+            log
+                .withValue("state", rejectedIn.name)
+                .withValue("rejections", rejectionsSinceLog)
+                .warn("circuit breaker rejecting calls")
+            rejectionsSinceLog = 0
+            lastRejectionLogMark = timeSource.markNow()
+        }
+        throw CircuitBrokenException()
+    }
 
     private suspend fun onSuccess(admission: Admission): Unit =
         mutex.withLock {
@@ -207,5 +223,10 @@ internal class RealCircuitBreaker(
         // counters platform-go's circuitbreakingcfg emitted here — "<name>_circuit_breaker_tripped"
         // on -> OPEN from CLOSED, "<name>_circuit_breaker_reset" on -> CLOSED, and
         // "<name>_circuit_breaker_failed" per counted failure — tagged with the "partition" attribute.
+    }
+
+    private companion object {
+        /** Minimum interval between rejection log lines, so a rejection storm can't flood the logs. */
+        private val REJECTION_LOG_INTERVAL: Duration = 5.seconds
     }
 }

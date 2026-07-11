@@ -18,7 +18,7 @@ private const val KEY_LENGTH = 32
  * (or `org.bouncycastle` XSalsa20/Poly1305) is left as follow-up work; AES-GCM is the recommended
  * backend in the meantime.
  */
-public fun newSalsa20EncryptorDecryptor(
+public fun salsa20EncryptorDecryptor(
     key: ByteArray,
     @Suppress("UNUSED_PARAMETER") observer: Observer = noopObserver(NAME),
 ): EncryptorDecryptor {
@@ -27,9 +27,9 @@ public fun newSalsa20EncryptorDecryptor(
 }
 
 private object Salsa20EncryptorDecryptor : EncryptorDecryptor {
-    override suspend fun encrypt(content: String): String =
+    override suspend fun encrypt(plaintext: ByteArray): ByteArray =
         TODO("salsa20: XSalsa20-Poly1305 (NaCl secretbox) encryption is not yet implemented")
 
-    override suspend fun decrypt(content: String): String =
+    override suspend fun decrypt(ciphertext: ByteArray): ByteArray =
         TODO("salsa20: XSalsa20-Poly1305 (NaCl secretbox) decryption is not yet implemented")
 }

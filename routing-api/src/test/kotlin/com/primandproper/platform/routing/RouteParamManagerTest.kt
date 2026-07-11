@@ -1,5 +1,6 @@
 package com.primandproper.platform.routing
 
+import com.primandproper.platform.observability.NoopLogger
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -7,7 +8,7 @@ import kotlin.test.assertEquals
 private class FakeRequest(
     private val params: Map<String, String>,
 ) : RoutingRequest {
-    override val method: String = "GET"
+    override val method: HttpMethod = HttpMethod.GET
     override val path: String = "/"
 
     override fun pathParameter(key: String): String? = params[key]
@@ -24,19 +25,19 @@ class RouteParamManagerTest {
 
     @Test
     fun `id fetcher parses a numeric param`() {
-        val fetch = manager.buildRouteParamIDFetcher(null, "id", "thing")
+        val fetch = manager.buildRouteParamIDFetcher(NoopLogger, "id", "thing")
         assertEquals(123uL, fetch(FakeRequest(mapOf("id" to "123"))))
     }
 
     @Test
     fun `id fetcher returns zero for a missing param`() {
-        val fetch = manager.buildRouteParamIDFetcher(null, "id", "thing")
+        val fetch = manager.buildRouteParamIDFetcher(NoopLogger, "id", "thing")
         assertEquals(0uL, fetch(FakeRequest(emptyMap())))
     }
 
     @Test
     fun `id fetcher returns zero for a non-numeric param`() {
-        val fetch = manager.buildRouteParamIDFetcher(null, "id", "thing")
+        val fetch = manager.buildRouteParamIDFetcher(NoopLogger, "id", "thing")
         assertEquals(0uL, fetch(FakeRequest(mapOf("id" to "abc"))))
     }
 

@@ -2,6 +2,12 @@ package com.primandproper.platform.database.postgres.tableaccess
 
 import com.primandproper.platform.database.Manager
 import com.primandproper.platform.errors.newError
+import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
+import com.primandproper.platform.observability.Observer
+import com.primandproper.platform.observability.TracerProvider
+import com.primandproper.platform.observability.span
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import javax.sql.DataSource
@@ -35,46 +41,105 @@ public enum class Privilege(public val sql: String) {
  * interpolated, because roles/databases/privileges cannot be passed as bind parameters in DDL — the
  * same reason the Go implementation quotes them by hand. Existence checks, which run against catalog
  * tables, do use bind parameters. Every method suspends and runs its JDBC work on [Dispatchers.IO].
+ *
+ * Every administrative operation is wrapped in an [Observer] span recording the role/database/table it
+ * touches — mirroring the module's other instrumented classes (e.g. `ExposedDatabaseClient`) — so a
+ * failed grant or user creation is traced and logged rather than vanishing. The password supplied to
+ * [createUser] is deliberately never recorded on the span or the log.
+ *
+ * @param dataSource the JDBC pool DDL runs against.
+ * @param logger optional root logger; defaults to noop.
+ * @param tracerProvider optional tracer provider; defaults to noop tracing.
  */
-public class TableAccessManager(
+public class TableAccessManager internal constructor(
     private val dataSource: DataSource,
+    private val o11y: Observer,
 ) : Manager {
+    public constructor(
+        dataSource: DataSource,
+        logger: Logger = NoopLogger,
+        tracerProvider: TracerProvider = NoopTracerProvider,
+    ) : this(dataSource, Observer(NAME, logger, tracerProvider))
+
     override suspend fun createUser(
         username: String,
         password: String,
-    ): Unit = execute(createUserSql(username, password))
+    ): Unit =
+        o11y.span("CreateUser") {
+            set("db.system", "postgresql")
+            set("db.user.name", username)
+            // The password is never recorded on the span or the log.
+            execute(createUserSql(username, password))
+        }
 
-    override suspend fun deleteUser(username: String): Unit = execute(deleteUserSql(username))
+    override suspend fun deleteUser(username: String): Unit =
+        o11y.span("DeleteUser") {
+            set("db.system", "postgresql")
+            set("db.user.name", username)
+            execute(deleteUserSql(username))
+        }
 
     override suspend fun createDatabase(
         dbName: String,
         owner: String,
-    ): Unit = execute(createDatabaseSql(dbName, owner))
+    ): Unit =
+        o11y.span("CreateDatabase") {
+            set("db.system", "postgresql")
+            set("db.name", dbName)
+            set("db.owner", owner)
+            execute(createDatabaseSql(dbName, owner))
+        }
 
-    override suspend fun deleteDatabase(dbName: String): Unit = execute(deleteDatabaseSql(dbName))
+    override suspend fun deleteDatabase(dbName: String): Unit =
+        o11y.span("DeleteDatabase") {
+            set("db.system", "postgresql")
+            set("db.name", dbName)
+            execute(deleteDatabaseSql(dbName))
+        }
 
     override suspend fun userExists(username: String): Boolean =
-        queryBool("SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = ?)", username)
+        o11y.span("UserExists") {
+            set("db.system", "postgresql")
+            set("db.user.name", username)
+            queryBool("SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = ?)", username)
+        }
 
     override suspend fun databaseExists(dbName: String): Boolean =
-        queryBool("SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = ?)", dbName)
+        o11y.span("DatabaseExists") {
+            set("db.system", "postgresql")
+            set("db.name", dbName)
+            queryBool("SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = ?)", dbName)
+        }
 
     override suspend fun userCanAccessDatabase(
         username: String,
         dbName: String,
-    ): Boolean = queryBool("SELECT has_database_privilege(?, ?, 'CONNECT')", username, dbName)
+    ): Boolean =
+        o11y.span("UserCanAccessDatabase") {
+            set("db.system", "postgresql")
+            set("db.user.name", username)
+            set("db.name", dbName)
+            queryBool("SELECT has_database_privilege(?, ?, 'CONNECT')", username, dbName)
+        }
 
     override suspend fun grantUserAccessToTable(
         username: String,
         schema: String,
         table: String,
         privilege: String,
-    ) {
-        if (!Privilege.isValid(privilege)) {
-            throw newError("invalid privilege: $privilege")
+    ): Unit =
+        o11y.span("GrantUserAccessToTable") {
+            set("db.system", "postgresql")
+            set("db.user.name", username)
+            set("db.schema", schema)
+            set("db.table", table)
+            set("db.privilege", privilege)
+            if (!Privilege.isValid(privilege)) {
+                // The span scope records and rethrows this as the operation's failure.
+                throw newError("invalid privilege: $privilege")
+            }
+            execute(grantSql(username, schema, table, privilege))
         }
-        execute(grantSql(username, schema, table, privilege))
-    }
 
     private suspend fun execute(sql: String): Unit =
         withContext(Dispatchers.IO) {
@@ -95,6 +160,11 @@ public class TableAccessManager(
                 }
             }
         }
+
+    internal companion object {
+        /** Component name for this manager's Observer, mirroring `ExposedDatabaseClient.NAME`. */
+        const val NAME: String = "table_access_manager"
+    }
 }
 
 /**

@@ -4,8 +4,10 @@ import com.primandproper.platform.capitalism.CapitalismConfig
 import com.primandproper.platform.capitalism.PaymentManager
 import com.primandproper.platform.capitalism.PaymentProvider
 import com.primandproper.platform.capitalism.noop.NoopPaymentManager
-import com.primandproper.platform.errors.newErrorf
+import com.primandproper.platform.errors.newError
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.TracerProvider
 
 /**
@@ -24,20 +26,20 @@ import com.primandproper.platform.observability.TracerProvider
  * @param stripeConfig required when the provider is [PaymentProvider.STRIPE]; ignored otherwise.
  * @param handler optional Stripe webhook event callback, wired into the Stripe manager.
  */
-public fun provideCapitalismImplementation(
+public fun PaymentManager(
     config: CapitalismConfig,
     stripeConfig: StripeConfig? = null,
     handler: EventHandler? = null,
-    logger: Logger? = null,
-    tracerProvider: TracerProvider? = null,
+    logger: Logger = NoopLogger,
+    tracerProvider: TracerProvider = NoopTracerProvider,
 ): PaymentManager {
-    if (!config.enabled) return NoopPaymentManager()
+    if (!config.enabled) return NoopPaymentManager
 
-    return when (PaymentProvider.fromValue(config.provider)) {
+    return when (config.provider) {
         PaymentProvider.STRIPE -> {
             val sc = requireNotNull(stripeConfig) { "stripe provider requires a StripeConfig" }
             StripePaymentManager(sc, handler, logger, tracerProvider)
         }
-        null -> throw newErrorf("unknown provider: %s", config.provider)
+        null -> throw newError("no payment provider selected for an enabled config")
     }
 }

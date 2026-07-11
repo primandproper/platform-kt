@@ -195,8 +195,96 @@ the toggle in `settings.gradle.kts`) — so **a server/JVM project consumes plat
 tooling on either side**, and JitPack itself never needs the Android SDK. Every JVM module depends
 only on other JVM modules, so no `.aar` is ever pulled into a server build.
 
-> Want the Android (`.aar`) modules on JitPack too? Drop `-PjvmOnly` from `jitpack.yml`; JitPack's
-> build image must then supply the Android SDK for the project's `compileSdk`.
+### Android modules (`.aar`)
+
+Ten packages ship a real Android-library counterpart. They carry the **same group and version scheme**
+as the JVM modules — `com.github.primandproper.platform-kt:<module>:<tag>` — but package as `.aar`:
+
+| Module (artifact ID) | What |
+|---|---|
+| `observability-logcat` | `LogcatLogger` over `android.util.Log`. |
+| `observability` | Umbrella `Observability { }` builder that wires the backends. |
+| `secrets-android` | `SecretSource` over EncryptedSharedPreferences. |
+| `analytics-android` | On-device event buffering. |
+| `featureflags-android` | Local flag store. |
+| `cryptography-android` | AES-256-GCM AEAD over the AndroidKeyStore. |
+| `cache-android` | Disk-backed `BatchCache` on Jetpack DataStore. |
+| `uploads-android` | Signed-URL client uploader. |
+| `eventstream-android` | Consumes SSE/WS into a `Flow`. |
+| `notifications-android` | FCM receive-side mapping. |
+
+#### Android consumer requirements
+
+These `.aar`s compile to **Java 17 bytecode** (`sourceCompatibility`/`targetCompatibility = 17`), so
+consuming them requires **AGP 8.x** (which understands Java-17 class files) and a project that itself
+compiles against Java 17.
+
+**Core-library desugaring is required on `minSdk < 26`.** Every Android module transitively exposes
+`opentelemetry-api` (via `:observability-api`), which references `java.time` / `java.util.function` —
+APIs only present natively from API 26. All ten modules ship with
+`isCoreLibraryDesugaringEnabled = true`, but desugaring is a consumer-side transform: your app module
+must also enable it, or `java.time` usage will crash at runtime on pre-26 devices.
+
+```kotlin
+android {
+    compileOptions {
+        isCoreLibraryDesugaringEnabled = true
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+}
+dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.3")
+}
+```
+
+Per-module `minSdk` (the shared floor is **21**; two modules raise it for the AndroidKeyStore):
+
+| Module | `minSdk` | Desugaring needed (`minSdk < 26`) |
+|---|---|---|
+| `observability` | 21 | Yes |
+| `observability-logcat` | 21 | Yes |
+| `analytics-android` | 21 | Yes |
+| `cache-android` | 21 | Yes |
+| `eventstream-android` | 21 | Yes |
+| `featureflags-android` | 21 | Yes |
+| `uploads-android` | 21 | Yes |
+| `notifications-android` | 21 | Yes |
+| `secrets-android` | 23 | Yes |
+| `cryptography-android` | 23 | Yes |
+
+`secrets-android` and `cryptography-android` require **API 23** because EncryptedSharedPreferences /
+`MasterKey` and the AndroidKeyStore AES-256-GCM key scheme are only available from API 23.
+
+#### Remote channel — GitHub Packages
+
+JitPack serves the JVM modules (its build runs `-PjvmOnly`, so it never needs the Android SDK). The
+ten Android `.aar` modules are published separately to this repo's **GitHub Packages** Maven registry
+by a tag-triggered CI job (`.github/workflows/publish.yml`): pushing a `v*` tag runs the full
+(non-`jvmOnly`) `publishAllPublicationsToGitHubPackagesRepository` at the tag's version, so a failure
+there can never regress JitPack's reliable JVM flow.
+
+Consume them by adding the authenticated GitHub Packages repository (GitHub requires a token even for
+public packages) and depending on the same coordinate as the JVM modules:
+
+```kotlin
+repositories {
+    maven {
+        url = uri("https://maven.pkg.github.com/primandproper/platform-kt")
+        credentials {
+            username = providers.gradleProperty("gpr.user").orNull ?: System.getenv("GITHUB_ACTOR")
+            password = providers.gradleProperty("gpr.token").orNull ?: System.getenv("GITHUB_TOKEN")
+        }
+    }
+}
+dependencies {
+    implementation("com.github.primandproper.platform-kt:cryptography-android:v0.1.0")
+}
+```
+
+For pre-tag experimentation, a **local checkout + `./gradlew publishToMavenLocal`** (which builds the
+`.aar`s — see [Local iteration](#local-iteration-without-a-tag)) consumed via `mavenLocal()` still
+works and needs no credentials.
 
 ### Local iteration without a tag
 

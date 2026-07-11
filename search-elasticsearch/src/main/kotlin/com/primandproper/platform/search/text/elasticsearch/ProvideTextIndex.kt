@@ -1,6 +1,8 @@
 package com.primandproper.platform.search.text.elasticsearch
 
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.TracerProvider
 import com.primandproper.platform.search.text.DocumentCodec
 import com.primandproper.platform.search.text.Index
@@ -42,8 +44,8 @@ public suspend fun <T : Any> provideTextIndex(
     indexName: String,
     elasticsearchConfig: ElasticsearchConfig? = null,
     client: ElasticsearchClient? = null,
-    logger: Logger? = null,
-    tracerProvider: TracerProvider? = null,
+    logger: Logger = NoopLogger,
+    tracerProvider: TracerProvider = NoopTracerProvider,
 ): Index<T> =
     when (config.provider) {
         TextSearchProvider.ELASTICSEARCH -> {

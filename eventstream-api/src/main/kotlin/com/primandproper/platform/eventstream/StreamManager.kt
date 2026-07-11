@@ -2,9 +2,12 @@ package com.primandproper.platform.eventstream
 
 import com.primandproper.platform.observability.Keys
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.Observer
 import com.primandproper.platform.observability.TracerProvider
 import com.primandproper.platform.observability.span
+import kotlinx.coroutines.CancellationException
 import java.util.concurrent.locks.ReentrantReadWriteLock
 import kotlin.concurrent.read
 import kotlin.concurrent.write
@@ -38,8 +41,8 @@ public class StreamManager<S : EventStream> internal constructor(
      * @param tracerProvider optional tracer provider; defaults to noop tracing.
      */
     public constructor(
-        logger: Logger? = null,
-        tracerProvider: TracerProvider? = null,
+        logger: Logger = NoopLogger,
+        tracerProvider: TracerProvider = NoopTracerProvider,
     ) : this(Observer(NAME, logger, tracerProvider))
 
     private val lock = ReentrantReadWriteLock()
@@ -115,6 +118,9 @@ public class StreamManager<S : EventStream> internal constructor(
                 for (s in snapshot) {
                     try {
                         s.send(event)
+                    } catch (t: CancellationException) {
+                        // Cancellation must propagate, not be swallowed and keep fanning out.
+                        throw t
                     } catch (t: Throwable) {
                         acknowledge(t, "sending event to stream")
                     }
@@ -141,6 +147,9 @@ public class StreamManager<S : EventStream> internal constructor(
                 if (includeFunc(memberId)) {
                     try {
                         s.send(event)
+                    } catch (t: CancellationException) {
+                        // Cancellation must propagate, not be swallowed and keep fanning out.
+                        throw t
                     } catch (t: Throwable) {
                         acknowledge(t, "sending event to stream")
                     }

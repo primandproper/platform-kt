@@ -5,6 +5,8 @@ import com.primandproper.platform.observability.Observer
 import com.primandproper.platform.observability.Operation
 import com.primandproper.platform.observability.noopObserver
 import com.primandproper.platform.observability.span
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.bouncycastle.crypto.generators.Argon2BytesGenerator
 import org.bouncycastle.crypto.params.Argon2Parameters
 import java.security.MessageDigest
@@ -18,6 +20,15 @@ private const val MEMORY_KIB = 64 * 1024
 private const val ITERATIONS = 1
 private const val SALT_LENGTH = 16
 private const val KEY_LENGTH = 32
+
+// Upper bounds on the cost parameters parsed out of a supplied encoded hash. The parameters are
+// attacker-controllable (the hash is untrusted input on the verify path), so an unbounded `m`/`t`/`p`
+// is a memory-/CPU-exhaustion DoS (e.g. `m=2000000000` would ask BouncyCastle for ~2 TiB). We cap
+// them generously — well above the 64 MiB / 1-iteration defaults, but far below anything that would
+// exhaust a host — and reject any hash that exceeds the caps. The parallelism cap reuses the same
+// 255 ceiling the derivation itself is clamped to.
+private const val MAX_MEMORY_KIB = 1024 * 1024 // 1 GiB
+private const val MAX_ITERATIONS = 16
 
 // minParallelism and maxParallelism bound the argon2 parallelism degree, mirroring platform-go. The
 // lower bound keeps a floor of concurrency; the upper bound prevents an overflow to 0 when narrowing
@@ -94,28 +105,34 @@ private fun Operation.recordArgonParams(): Operation =
         .set("argon2.parallelism", parallelism)
         .set("argon2.key_length", KEY_LENGTH)
 
-private fun deriveKey(
+/**
+ * Runs the Argon2id key derivation. The 64 MiB derivation is CPU- and memory-bound, so it must not run
+ * inline on the caller's dispatcher (blocking, say, a shared IO/UI thread); it hops to
+ * [Dispatchers.Default]. [withContext] propagates cancellation, so a cancelled caller still unwinds.
+ */
+private suspend fun deriveKey(
     password: String,
     salt: ByteArray,
     memoryKiB: Int,
     iterations: Int,
     parallelism: Int,
     keyLength: Int,
-): ByteArray {
-    val params =
-        Argon2Parameters.Builder(Argon2Parameters.ARGON2_id)
-            .withVersion(Argon2Parameters.ARGON2_VERSION_13)
-            .withIterations(iterations)
-            .withMemoryAsKB(memoryKiB)
-            .withParallelism(parallelism)
-            .withSalt(salt)
-            .build()
+): ByteArray =
+    withContext(Dispatchers.Default) {
+        val params =
+            Argon2Parameters.Builder(Argon2Parameters.ARGON2_id)
+                .withVersion(Argon2Parameters.ARGON2_VERSION_13)
+                .withIterations(iterations)
+                .withMemoryAsKB(memoryKiB)
+                .withParallelism(parallelism)
+                .withSalt(salt)
+                .build()
 
-    val generator = Argon2BytesGenerator().apply { init(params) }
-    val out = ByteArray(keyLength)
-    generator.generateBytes(password.toByteArray(Charsets.UTF_8), out)
-    return out
-}
+        val generator = Argon2BytesGenerator().apply { init(params) }
+        val out = ByteArray(keyLength)
+        generator.generateBytes(password.toByteArray(Charsets.UTF_8), out)
+        out
+    }
 
 private fun encodeHash(
     hash: ByteArray,
@@ -161,6 +178,13 @@ private fun decodeHash(encoded: String): DecodedHash {
     val memory = paramFields["m"]?.toIntOrNull() ?: throw IllegalArgumentException("missing argon2 memory parameter")
     val iterations = paramFields["t"]?.toIntOrNull() ?: throw IllegalArgumentException("missing argon2 iterations parameter")
     val parallelism = paramFields["p"]?.toIntOrNull() ?: throw IllegalArgumentException("missing argon2 parallelism parameter")
+
+    // The cost parameters come from untrusted input; bound them before handing them to the derivation
+    // so a crafted hash (e.g. `m=2000000000`) cannot exhaust memory/CPU. `toIntOrNull` already rejects
+    // values above Int.MAX_VALUE, so anything larger surfaces earlier as a malformed-parameter error.
+    require(memory in 1..MAX_MEMORY_KIB) { "argon2 memory parameter out of range: $memory (max $MAX_MEMORY_KIB KiB)" }
+    require(iterations in 1..MAX_ITERATIONS) { "argon2 iterations parameter out of range: $iterations (max $MAX_ITERATIONS)" }
+    require(parallelism in 1..MAX_PARALLELISM) { "argon2 parallelism parameter out of range: $parallelism (max $MAX_PARALLELISM)" }
 
     val salt = runCatching { decodeBase64Std(parts[4]) }.getOrElse { throw IllegalArgumentException("malformed argon2 salt", it) }
     val key = runCatching { decodeBase64Std(parts[5]) }.getOrElse { throw IllegalArgumentException("malformed argon2 hash", it) }

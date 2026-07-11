@@ -45,10 +45,10 @@ private val crc16tab: IntArray =
         0x6e17, 0x7e36, 0x4e55, 0x5e74, 0x2e93, 0x3eb2, 0x0ed1, 0x1ef0,
     )
 
-private fun crc16sum(s: String): Int {
+private fun crc16sum(bytes: ByteArray): Int {
     var crc = 0
-    for (element in s) {
-        val c = element.code and 0xff
+    for (b in bytes) {
+        val c = b.toInt() and 0xff
         crc = ((crc shl 8) and 0xffff) xor crc16tab[((crc ushr 8) xor c) and 0xff]
     }
     return crc and 0xffff
@@ -57,8 +57,13 @@ private fun crc16sum(s: String): Int {
 /**
  * Returns the Redis Cluster slot for [s], treating [s] as already-extracted hashtag content.
  * Equivalent to `CRC16(s) mod 16384`. Port of platform-go's `slots.Slot`.
+ *
+ * Redis hashes the raw key **bytes**, so [s] is CRC16'd over its UTF-8 encoding rather than its UTF-16
+ * code units — otherwise a non-ASCII key would bucket to a different slot than the server computes, and
+ * batched `getMany`/`setMany` would hit the wrong node or fail with `CROSSSLOT`. ASCII keys are
+ * unaffected (one byte per code unit).
  */
-public fun slot(s: String): Int = crc16sum(s) % SLOT_COUNT
+public fun slot(s: String): Int = crc16sum(s.encodeToByteArray()) % SLOT_COUNT
 
 /**
  * Returns the cluster slot for a full Redis [key], applying Redis's hashtag extraction rule: if the

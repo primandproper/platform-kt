@@ -22,10 +22,10 @@ private const val SERVICE_NAME = "in_memory_feature_flag_manager"
  */
 public class InMemoryFeatureFlagManager(
     flags: Map<String, Any?> = emptyMap(),
-    observer: Observer? = null,
+    observer: Observer = noopObserver(SERVICE_NAME),
 ) : FeatureFlagManager {
     private val flags: Map<String, Any?> = flags.toMap()
-    private val o11y: Observer = observer ?: noopObserver(SERVICE_NAME)
+    private val o11y: Observer = observer
 
     override suspend fun canUseFeature(
         feature: String,

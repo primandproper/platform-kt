@@ -4,6 +4,8 @@ import com.primandproper.platform.analytics.EventReporter
 import com.primandproper.platform.analytics.noop.NoopEventReporter
 import com.primandproper.platform.observability.Keys
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.Observer
 import com.primandproper.platform.observability.TracerProvider
 import com.primandproper.platform.observability.span
@@ -29,20 +31,20 @@ public const val SOURCE_PROPERTY_KEY: String = "source"
  * `:analytics-api` module deliberately does not depend on any vendor backend.
  */
 public class MultiSourceEventReporter internal constructor(
-    reporters: Map<String, EventReporter>?,
+    reporters: Map<String, EventReporter>,
     private val o11y: Observer,
 ) {
-    internal val reporters: Map<String, EventReporter> = reporters ?: emptyMap()
+    internal val reporters: Map<String, EventReporter> = reporters
 
     /**
-     * @param reporters per-source reporters; a `null` map is treated as empty.
+     * @param reporters per-source reporters; defaults to an empty map.
      * @param logger optional root logger; defaults to noop.
      * @param tracerProvider optional tracer provider; defaults to noop.
      */
     public constructor(
-        reporters: Map<String, EventReporter>? = null,
-        logger: Logger? = null,
-        tracerProvider: TracerProvider? = null,
+        reporters: Map<String, EventReporter> = emptyMap(),
+        logger: Logger = NoopLogger,
+        tracerProvider: TracerProvider = NoopTracerProvider,
     ) : this(reporters, Observer(NAME, logger, tracerProvider))
 
     /** Returns the reporter for [source], or [NoopEventReporter] if unknown/missing. */
@@ -60,7 +62,7 @@ public class MultiSourceEventReporter internal constructor(
      * Flushes and closes every underlying reporter. A reporter shared across multiple sources
      * (e.g. PostHog sources with the same API key) is closed exactly once.
      */
-    public fun close() {
+    public suspend fun close() {
         val seen = mutableSetOf<EventReporter>()
         for (r in reporters.values) {
             if (seen.add(r)) r.close()

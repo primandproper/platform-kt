@@ -53,18 +53,38 @@ public data class Vector<T : Any>(
 }
 
 /**
+ * An opaque, per-provider query filter. Port of the `any` filter slot on platform-go's
+ * `vectorsearch.QueryRequest`, given a sealed shape here so the set of filter forms is closed and
+ * exhaustively matchable. `null` on [QueryRequest.filter] means no filter; a variant carries the
+ * filter itself. Cross-provider portability is intentionally not modeled — callers translate at the
+ * call site, and the sealed hierarchy leaves the door open for future typed variants.
+ */
+public sealed interface ProviderFilter {
+    /**
+     * An opaque, provider-interpreted filter fragment the caller is responsible for. It is
+     * injection-adjacent: pgvector interprets [expression] as a SQL `WHERE` fragment concatenated
+     * verbatim; other providers interpret it their own way. Named `Raw` to make that lack of
+     * structure explicit — there is no cross-provider meaning, only what the target provider does
+     * with the string.
+     */
+    public data class RawFilter(
+        public val expression: String,
+    ) : ProviderFilter
+}
+
+/**
  * Describes a top-K nearest-neighbor search. Port of platform-go's `vectorsearch.QueryRequest`.
  *
  * @param embedding the query vector; must match the index dimension.
  * @param topK the number of results to return; backends may cap this at a backend-specific maximum.
- * @param filter an OPAQUE per-provider filter. The pgvector provider interprets it as a SQL fragment
- *   appended to the WHERE clause; other providers interpret it differently. `null` means no filter.
- *   Cross-provider filter portability is intentionally not modeled — callers translate at the call site.
+ * @param filter an OPAQUE per-provider filter, or `null` for no filter. The pgvector provider
+ *   interprets a [ProviderFilter.RawFilter] as a SQL fragment appended to the WHERE clause; other
+ *   providers interpret it differently. Cross-provider portability is intentionally not modeled.
  */
 public data class QueryRequest(
     val embedding: FloatArray,
     val topK: Int = 10,
-    val filter: Any? = null,
+    val filter: ProviderFilter? = null,
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -106,8 +126,11 @@ public interface IndexWriter<T : Any> {
     public suspend fun wipe()
 }
 
-/** The read half of a vector [Index]. Port of platform-go's `vectorsearch.IndexSearcher[T]`. */
-public interface IndexSearcher<T : Any> {
+/**
+ * The read half of a vector [Index]. Port of platform-go's `vectorsearch.IndexSearcher[T]` — a SAM
+ * interface, since `query` is its only method.
+ */
+public fun interface IndexSearcher<T : Any> {
     /** Returns the top-K nearest neighbors for [request]'s embedding. */
     public suspend fun query(request: QueryRequest): List<QueryResult<T>>
 }

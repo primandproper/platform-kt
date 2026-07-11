@@ -11,7 +11,7 @@ class StorageConfigTest {
     fun `standard filesystem config validates`() {
         StorageConfig(
             bucketName = "bucket",
-            provider = "filesystem",
+            provider = StorageProvider.FILESYSTEM,
             filesystemConfig = FilesystemConfig(rootDirectory = "/blah"),
         ).validate()
     }
@@ -19,27 +19,19 @@ class StorageConfigTest {
     @Test
     fun `missing bucket name is invalid`() {
         assertFailsWith<StorageConfigException> {
-            StorageConfig(bucketName = "", provider = "memory").validate()
+            StorageConfig(bucketName = "", provider = StorageProvider.MEMORY).validate()
         }
     }
 
     @Test
-    fun `invalid provider is rejected`() {
-        assertFailsWith<StorageConfigException> {
-            StorageConfig(bucketName = "bucket", provider = "invalid_provider").validate()
-        }
-    }
-
-    @Test
-    fun `provider is canonicalized before validation`() {
+    fun `provider is resolved from its string form at the parse edge`() {
         // "  S3 " must resolve to s3 (trim + lowercase), matching Go's ValidateWithContext rewrite.
-        StorageConfig(bucketName = "bucket", provider = "  S3 ").validate()
-        assertEquals(StorageProvider.S3, StorageConfig(bucketName = "b", provider = "  S3 ").resolvedProvider())
+        assertEquals(StorageProvider.S3, StorageProvider.fromValue("  S3 "))
     }
 
     @Test
     fun `s3, gcp, and memory validate without a sub-config`() {
-        for (p in listOf("s3", "gcp", "memory")) {
+        for (p in listOf(StorageProvider.S3, StorageProvider.GCP, StorageProvider.MEMORY)) {
             StorageConfig(bucketName = "bucket", provider = p).validate()
         }
     }
@@ -47,11 +39,11 @@ class StorageConfigTest {
     @Test
     fun `r2 requires its config`() {
         assertFailsWith<StorageConfigException> {
-            StorageConfig(bucketName = "bucket", provider = "r2").validate()
+            StorageConfig(bucketName = "bucket", provider = StorageProvider.R2).validate()
         }
         StorageConfig(
             bucketName = "bucket",
-            provider = "r2",
+            provider = StorageProvider.R2,
             r2Config = R2Config("acct", "key", "secret"),
         ).validate()
     }
@@ -59,11 +51,11 @@ class StorageConfigTest {
     @Test
     fun `backblaze requires its config`() {
         assertFailsWith<StorageConfigException> {
-            StorageConfig(bucketName = "bucket", provider = "backblaze_b2").validate()
+            StorageConfig(bucketName = "bucket", provider = StorageProvider.BACKBLAZE_B2).validate()
         }
         StorageConfig(
             bucketName = "bucket",
-            provider = "backblaze_b2",
+            provider = StorageProvider.BACKBLAZE_B2,
             backblazeB2Config = BackblazeB2Config("id", "key", "us-west"),
         ).validate()
     }
@@ -71,7 +63,7 @@ class StorageConfigTest {
     @Test
     fun `filesystem requires its config`() {
         assertFailsWith<StorageConfigException> {
-            StorageConfig(bucketName = "bucket", provider = "filesystem").validate()
+            StorageConfig(bucketName = "bucket", provider = StorageProvider.FILESYSTEM).validate()
         }
     }
 
@@ -81,7 +73,7 @@ class StorageConfigTest {
         assertFailsWith<StorageConfigException> {
             StorageConfig(
                 bucketName = "bucket",
-                provider = "memory",
+                provider = StorageProvider.MEMORY,
                 filesystemConfig = FilesystemConfig(rootDirectory = "/blah"),
             ).validate()
         }

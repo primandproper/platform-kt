@@ -1,5 +1,6 @@
 package com.primandproper.platform.notifications.noop
 
+import com.primandproper.platform.notifications.Platform
 import com.primandproper.platform.notifications.PushMessage
 import com.primandproper.platform.notifications.PushNotificationSender
 
@@ -8,16 +9,16 @@ import com.primandproper.platform.notifications.PushNotificationSender
  * `notifications/mobile/noop.pushNotificationSender`. The safe default the config factory falls back
  * to when no provider is selected, and for tests that don't care about real delivery.
  */
-public class NoopPushNotificationSender : PushNotificationSender {
+public object NoopPushNotificationSender : PushNotificationSender {
     override suspend fun sendPush(
-        platform: String,
+        platform: Platform,
         token: String,
         message: PushMessage,
     ) {
     }
 
     override suspend fun sendToTopic(
-        platform: String,
+        platform: Platform,
         topic: String,
         message: PushMessage,
     ) {

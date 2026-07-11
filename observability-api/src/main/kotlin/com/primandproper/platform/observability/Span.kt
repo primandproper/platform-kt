@@ -1,6 +1,7 @@
 package com.primandproper.platform.observability
 
 import io.opentelemetry.extension.kotlin.asContextElement
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.CoroutineContext
 import io.opentelemetry.context.Context as OtelContext
@@ -38,6 +39,9 @@ public suspend inline fun <T> Observer.span(
     val op = begin(name)
     return try {
         withContext(op.span.asCoroutineContextElement()) { op.block() }
+    } catch (t: CancellationException) {
+        // Coroutine cancellation is not a span error; never record it, just propagate.
+        throw t
     } catch (t: Throwable) {
         op.acknowledge(t, "operation \"$name\" failed")
         throw t
@@ -59,6 +63,9 @@ public inline fun <T> Observer.spanBlocking(
     return op.makeCurrent().use {
         try {
             op.block()
+        } catch (t: CancellationException) {
+            // Coroutine cancellation is not a span error; never record it, just propagate.
+            throw t
         } catch (t: Throwable) {
             op.acknowledge(t, "operation \"$name\" failed")
             throw t

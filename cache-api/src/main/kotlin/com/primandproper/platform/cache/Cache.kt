@@ -13,6 +13,11 @@ package com.primandproper.platform.cache
  *
  * Serialization stays at the boundary, exactly as in Go: the in-memory backend holds live `T` values,
  * while a server backend (`:cache-redis`) takes a codec to turn `T` into its stored bytes.
+ *
+ * There is deliberately no `close()` here (unlike the platform's other lifecycle interfaces, which
+ * share `SuspendCloseable`): a `Cache` does not own its backing client's lifecycle. The injected
+ * `RedisClient` / store is owned by whoever constructed it, so there is nothing for the cache
+ * abstraction itself to close.
  */
 public interface Cache<T : Any> {
     /** Returns the value stored at [key], or `null` on a cache miss. */

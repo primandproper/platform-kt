@@ -17,10 +17,10 @@ public const val NOOP_PROVIDER: String = "noop"
  * for both model and provider, reports zero [Embedding.dimensions], and sets [Embedding.generatedAt]
  * — exactly the fields Go's noop populates.
  */
-public class NoopEmbedder : Embedder {
+public object NoopEmbedder : Embedder {
     override suspend fun generateEmbedding(input: EmbeddingInput): Embedding =
         Embedding(
-            vector = emptyList(),
+            vector = FloatArray(0),
             sourceText = input.content,
             model = NOOP_PROVIDER,
             provider = NOOP_PROVIDER,

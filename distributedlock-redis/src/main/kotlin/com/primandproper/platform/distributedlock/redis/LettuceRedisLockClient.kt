@@ -67,7 +67,12 @@ public class LettuceRedisLockClient(
         value: String,
         ttlMillis: Long,
     ): Boolean {
-        val args = if (ttlMillis > 0) SetArgs.Builder.nx().px(ttlMillis) else SetArgs.Builder.nx()
+        // A sub-millisecond TTL truncates to 0. A `SET NX` without `PX` is a *permanent* lock — a
+        // deadlock if the holder ever crashes — so reject it loudly rather than silently omitting the
+        // expiry. Callers should already have been stopped by RedisLocker's TTL guard; this is the
+        // transport-boundary backstop.
+        require(ttlMillis >= 1) { "redis lock TTL must be at least 1ms, got ${ttlMillis}ms" }
+        val args = SetArgs.Builder.nx().px(ttlMillis)
         // Lettuce returns "OK" when the write happened and null when NX rejected it (key present).
         return commands().set(key, value, args).await() == "OK"
     }

@@ -20,6 +20,7 @@ class FakeAdvisoryLockClient(
     var reserveError: Throwable? = null,
     var tryLockError: Throwable? = null,
     var unlockError: Throwable? = null,
+    var aliveError: Throwable? = null,
     var pingError: Throwable? = null,
 ) : AdvisoryLockClient {
     val connections: MutableList<FakeAdvisoryLockConnection> = mutableListOf()
@@ -65,6 +66,7 @@ class FakeAdvisoryLockConnection(
 
     override suspend fun isAlive(): Boolean {
         aliveCalls++
+        client.aliveError?.let { throw it }
         return client.alive
     }
 

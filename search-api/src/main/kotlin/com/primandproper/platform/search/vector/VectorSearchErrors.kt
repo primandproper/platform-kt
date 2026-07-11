@@ -2,27 +2,22 @@ package com.primandproper.platform.search.vector
 
 import com.primandproper.platform.errors.PlatformException
 
-// Vector-search sentinels. In platform-go these are `var Err… = platformerrors.New(…)` values matched
-// via errors.Is; here they are singleton PlatformExceptions matched via `errors.isError` (identity
-// through the cause chain), exactly as the cache/vector ports do for their sentinels.
+// Vector-search error types. In platform-go these are `var Err… = platformerrors.New(…)` sentinels
+// matched via errors.Is; here they are exception CLASSES thrown fresh at each site and matched by
+// type. The nil-config / nil-database-client sentinels are dropped — Kotlin's non-null types already
+// forbid what they modelled.
 
-/** A query or upsert was attempted with a zero-length vector. Mirrors `vectorsearch.ErrEmptyEmbedding`. */
-public val ErrEmptyEmbedding: PlatformException = PlatformException("empty embedding vector provided")
+/** Thrown when a query or upsert was attempted with a zero-length vector. Mirrors `vectorsearch.ErrEmptyEmbedding`. */
+public class EmptyEmbeddingException : PlatformException("empty embedding vector provided")
 
-/** A vector with the given id does not exist in the index. Mirrors `vectorsearch.ErrNotFound`. */
-public val ErrNotFound: PlatformException = PlatformException("vector not found")
+/** Thrown when a vector with the given id does not exist in the index. Mirrors `vectorsearch.ErrNotFound`. */
+public class VectorNotFoundException : PlatformException("vector not found")
 
-/** A `null` provider config was passed to a constructor. Mirrors `vectorsearch.ErrNilConfig`. */
-public val ErrNilConfig: PlatformException = PlatformException("nil vector search config")
+/** Thrown when an embedding's dimension does not match the index dimension. Mirrors `vectorsearch.ErrDimensionMismatch`. */
+public class DimensionMismatchException : PlatformException("embedding dimension does not match index dimension")
 
-/** An embedding's dimension does not match the index dimension. Mirrors `vectorsearch.ErrDimensionMismatch`. */
-public val ErrDimensionMismatch: PlatformException = PlatformException("embedding dimension does not match index dimension")
+/** Thrown when an unsupported [DistanceMetric] was specified. Mirrors `vectorsearch.ErrInvalidMetric`. */
+public class InvalidMetricException : PlatformException("invalid distance metric")
 
-/** A `null` database client was passed to a postgres-backed provider. Mirrors `vectorsearch.ErrNilDatabaseClient`. */
-public val ErrNilDatabaseClient: PlatformException = PlatformException("nil database client")
-
-/** An unsupported [DistanceMetric] was specified. Mirrors `vectorsearch.ErrInvalidMetric`. */
-public val ErrInvalidMetric: PlatformException = PlatformException("invalid distance metric")
-
-/** A non-positive dimension was specified. Mirrors `vectorsearch.ErrInvalidDimension`. */
-public val ErrInvalidDimension: PlatformException = PlatformException("invalid index dimension")
+/** Thrown when a non-positive dimension was specified. Mirrors `vectorsearch.ErrInvalidDimension`. */
+public class InvalidDimensionException : PlatformException("invalid index dimension")

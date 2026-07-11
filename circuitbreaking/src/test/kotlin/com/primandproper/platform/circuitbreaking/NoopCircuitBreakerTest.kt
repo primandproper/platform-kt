@@ -21,9 +21,4 @@ class NoopCircuitBreakerTest {
             }
             assertEquals(CircuitState.CLOSED, NoopCircuitBreaker.state.value)
         }
-
-    @Test
-    fun ensureCircuitBreakerReturnsNoopForNull() {
-        assertEquals(NoopCircuitBreaker, ensureCircuitBreaker(null))
-    }
 }

@@ -2,6 +2,8 @@ package com.primandproper.platform.random
 
 import com.primandproper.platform.observability.Keys
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.Observer
 import com.primandproper.platform.observability.TracerProvider
 import com.primandproper.platform.observability.spanBlocking
@@ -53,8 +55,8 @@ public class SecureRandomGenerator internal constructor(
      * @param source the byte source; defaults to [SecureRandomSource]. Overridable for tests.
      */
     public constructor(
-        logger: Logger? = null,
-        tracerProvider: TracerProvider? = null,
+        logger: Logger = NoopLogger,
+        tracerProvider: TracerProvider = NoopTracerProvider,
         source: RandomSource = SecureRandomSource,
     ) : this(Observer("random_generator", logger, tracerProvider), source)
 
@@ -87,11 +89,25 @@ public class SecureRandomGenerator internal constructor(
     override fun generateAlphabetEncodedString(
         alphabet: String,
         length: Int,
-    ): String =
-        o11y.spanBlocking("GenerateAlphabetEncodedString") {
+    ): String {
+        // Rejection sampling maps a single byte onto an alphabet index, so an alphabet larger than a
+        // byte's range can never be covered: the largest usable multiple of `alphabet.length` that
+        // fits in a byte collapses to 0, no byte is ever accepted, and the sampling loop spins forever.
+        // Reject before opening the span (and thus before entering the loop) so a bad alphabet fails
+        // fast instead of burning the [RandomSource] indefinitely. Exactly 256 characters is still fine.
+        require(alphabet.length <= MAX_ALPHABET_LENGTH) {
+            "alphabet must be at most $MAX_ALPHABET_LENGTH characters, was ${alphabet.length}"
+        }
+        return o11y.spanBlocking("GenerateAlphabetEncodedString") {
             set(Keys.LENGTH, length)
             buildAlphabetString(alphabet, length) { source.nextBytes(1)[0].toInt() }
         }
+    }
+
+    private companion object {
+        /** A rejection-sampled byte can index at most 256 distinct characters. */
+        const val MAX_ALPHABET_LENGTH = 256
+    }
 }
 
 /**

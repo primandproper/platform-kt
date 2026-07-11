@@ -22,7 +22,7 @@ class EventReporterMockTest {
             mock.eventOccurred("signup", "u1")
             mock.eventOccurredAnonymous("page_view", "anon1")
 
-            assertEquals(1, mock.closeCalls.size)
+            assertEquals(1, mock.closeCalls)
             assertEquals(EventReporterMock.AddUserCall("u1", mapOf("plan" to "pro")), mock.addUserCalls.single())
             assertEquals("signup", mock.eventOccurredCalls.single().event)
             assertEquals("anon1", mock.eventOccurredAnonymousCalls.single().anonymousID)

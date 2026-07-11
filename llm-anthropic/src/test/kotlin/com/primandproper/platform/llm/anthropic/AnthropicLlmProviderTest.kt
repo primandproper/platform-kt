@@ -1,18 +1,21 @@
 package com.primandproper.platform.llm.anthropic
 
 import com.primandproper.platform.circuitbreaking.CircuitBreaker
-import com.primandproper.platform.circuitbreaking.ErrCircuitBroken
+import com.primandproper.platform.circuitbreaking.CircuitBrokenException
 import com.primandproper.platform.circuitbreaking.NoopCircuitBreaker
 import com.primandproper.platform.circuitbreaking.RecordingCircuitBreaker
 import com.primandproper.platform.httpclient.FakeHttpClient
 import com.primandproper.platform.httpclient.HttpMethod
 import com.primandproper.platform.httpclient.HttpRequest
 import com.primandproper.platform.httpclient.HttpResponse
+import com.primandproper.platform.llm.CompletionChunk
 import com.primandproper.platform.llm.CompletionParams
 import com.primandproper.platform.llm.LlmKeys
 import com.primandproper.platform.llm.Message
 import com.primandproper.platform.llm.Role
+import com.primandproper.platform.llm.TokenUsage
 import com.primandproper.platform.observability.testing.RecordingObserver
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.int
@@ -146,6 +149,37 @@ class AnthropicLlmProviderTest {
         }
 
     @Test
+    fun `complete surfaces the usage and finish reason on the result`() =
+        runTest {
+            val (provider, _, _) = recording()
+
+            val result = provider.complete(params())
+
+            assertEquals(TokenUsage(inputTokens = 10, outputTokens = 5), result.usage)
+            assertEquals(15, result.usage?.totalTokens)
+            assertEquals("end_turn", result.finishReason)
+        }
+
+    @Test
+    fun `stream emits a single terminal chunk carrying the reply usage and finish reason`() =
+        runTest {
+            val (provider, _, _) = recording()
+
+            val chunks = provider.stream(params()).toList()
+
+            assertEquals(
+                listOf(
+                    CompletionChunk(
+                        content = "Hello from Claude mock!",
+                        usage = TokenUsage(inputTokens = 10, outputTokens = 5),
+                        finishReason = "end_turn",
+                    ),
+                ),
+                chunks,
+            )
+        }
+
+    @Test
     fun `complete records the token total and finish reason on success`() =
         runTest {
             val (provider, obs, _) = recording()
@@ -202,7 +236,7 @@ class AnthropicLlmProviderTest {
             val (provider, _, fake) = recording(breaker = breaker)
 
             val error = assertFailsWith<Throwable> { provider.complete(params()) }
-            assertEquals(ErrCircuitBroken, error)
+            assertTrue(error is CircuitBrokenException)
             assertTrue(fake.requests.isEmpty())
             assertEquals(1, breaker.rejectionCount)
         }

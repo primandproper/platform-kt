@@ -1,11 +1,12 @@
 package com.primandproper.platform.search.vector.pgvector
 
-import com.primandproper.platform.errors.ErrInvalidIDProvided
+import com.primandproper.platform.errors.InvalidIDProvidedException
 import com.primandproper.platform.errors.isError
 import com.primandproper.platform.observability.testing.RecordingObserver
+import com.primandproper.platform.search.vector.DimensionMismatchException
 import com.primandproper.platform.search.vector.DistanceMetric
-import com.primandproper.platform.search.vector.ErrDimensionMismatch
-import com.primandproper.platform.search.vector.ErrEmptyEmbedding
+import com.primandproper.platform.search.vector.EmptyEmbeddingException
+import com.primandproper.platform.search.vector.ProviderFilter
 import com.primandproper.platform.search.vector.QueryRequest
 import com.primandproper.platform.search.vector.Vector
 import kotlinx.coroutines.test.runTest
@@ -37,7 +38,7 @@ class PgvectorIndexManagerTest {
     @Test
     fun `invalid index name is rejected`() {
         val err = assertFailsWith<Throwable> { manager(indexName = "bad name!") }
-        assertTrue(isError(err, ErrInvalidIdentifier))
+        assertTrue(isError<InvalidIdentifierException>(err))
     }
 
     // ---- ensureTable ----
@@ -88,21 +89,21 @@ class PgvectorIndexManagerTest {
     fun `Upsert rejects an empty id`() =
         runTest {
             val err = assertFailsWith<Throwable> { manager().upsert(Vector("", floatArrayOf(1f, 2f, 3f))) }
-            assertTrue(isError(err, ErrInvalidIDProvided))
+            assertTrue(isError<InvalidIDProvidedException>(err))
         }
 
     @Test
     fun `Upsert rejects an empty embedding`() =
         runTest {
             val err = assertFailsWith<Throwable> { manager().upsert(Vector("a", floatArrayOf())) }
-            assertTrue(isError(err, ErrEmptyEmbedding))
+            assertTrue(isError<EmptyEmbeddingException>(err))
         }
 
     @Test
     fun `Upsert rejects a dimension mismatch`() =
         runTest {
             val err = assertFailsWith<Throwable> { manager().upsert(Vector("a", floatArrayOf(1f, 2f))) }
-            assertTrue(isError(err, ErrDimensionMismatch))
+            assertTrue(isError<DimensionMismatchException>(err))
         }
 
     // ---- delete & wipe ----
@@ -171,18 +172,21 @@ class PgvectorIndexManagerTest {
         }
 
     @Test
-    fun `Query appends a string filter to the WHERE clause`() =
+    fun `Query appends a raw filter to the WHERE clause`() =
         runTest {
             val exec = FakePgvectorExecutor()
-            manager(exec).query(QueryRequest(floatArrayOf(1f, 2f, 3f), filter = "metadata->>'kind' = 'doc'"))
+            manager(exec).query(
+                QueryRequest(floatArrayOf(1f, 2f, 3f), filter = ProviderFilter.RawFilter("metadata->>'kind' = 'doc'")),
+            )
             assertTrue(exec.queried.single().sql.contains("FROM \"docs\" WHERE metadata->>'kind' = 'doc' ORDER BY"))
         }
 
     @Test
-    fun `Query rejects a non-string filter`() =
+    fun `Query with a blank raw filter emits no WHERE clause`() =
         runTest {
-            val err = assertFailsWith<Throwable> { manager().query(QueryRequest(floatArrayOf(1f, 2f, 3f), filter = 42)) }
-            assertTrue(isError(err, ErrInvalidFilter))
+            val exec = FakePgvectorExecutor()
+            manager(exec).query(QueryRequest(floatArrayOf(1f, 2f, 3f), filter = ProviderFilter.RawFilter("")))
+            assertTrue(exec.queried.single().sql.contains("FROM \"docs\" ORDER BY"))
         }
 
     @Test
@@ -197,7 +201,7 @@ class PgvectorIndexManagerTest {
     fun `Query rejects a dimension mismatch`() =
         runTest {
             val err = assertFailsWith<Throwable> { manager().query(QueryRequest(floatArrayOf(1f))) }
-            assertTrue(isError(err, ErrDimensionMismatch))
+            assertTrue(isError<DimensionMismatchException>(err))
         }
 
     // ---- observability ----

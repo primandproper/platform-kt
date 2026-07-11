@@ -20,44 +20,46 @@ public val DEFAULT_IDLE_TIMEOUT: Duration = MAX_TIMEOUT
 
 /**
  * The settings pertinent to the HTTP serving portion of a service. Direct port of platform-go's
- * `server/http.Config`, with [ensureDefaults] filling the zero-valued timeouts exactly as
- * `provideStdLibHTTPServer`'s `if <= 0` guards do.
+ * `server/http.Config`. Immutable: an unset timeout is a `null` sentinel resolved on read by
+ * [readTimeout]/[writeTimeout]/[idleTimeout] exactly as `provideStdLibHTTPServer`'s `if <= 0` guards
+ * do, and the config is validated at construction in [init] rather than in a separate phase.
  *
  * @param port the listen port. Go models this as `uint16`; represented here as an [Int] validated to
- *   `1..65535` — the range a `uint16` port occupies — since Ktor's engine takes an `Int` port.
+ *   `1..65535` — the range a `uint16` port occupies — since Ktor's engine takes an [Int] port.
  * @param startupDeadline bounds how long binding the listener may take. Required, mirroring Go's
  *   `validation.Required` (Ktor cannot bound the bind itself yet — see `TODO(startup-deadline)` in
  *   `:server-ktor`).
- * @param readTimeout / writeTimeout / idleTimeout server socket timeouts; zero means "apply the
- *   default in [ensureDefaults]".
- * @param sslCertificateFile / sslCertificateKeyFile PEM paths enabling TLS (see `TODO(tls)` in the
- *   Ktor backend — PEM-to-keystore conversion is required there).
+ * @param readTimeout / writeTimeout / idleTimeout server socket timeouts; `null` (the default) means
+ *   "apply the corresponding `DEFAULT_*_TIMEOUT`", resolved by the like-named getter methods.
+ * @param sslCertificateFile / sslCertificateKeyFile PEM paths enabling TLS; `null` means "not set"
+ *   (see `TODO(tls)` in the Ktor backend — PEM-to-keystore conversion is required there).
  * @param debug enables debug behavior, mirroring Go's `Debug`.
  */
 public data class HttpServerConfig(
     val port: Int,
     val startupDeadline: Duration,
-    var readTimeout: Duration = Duration.ZERO,
-    var writeTimeout: Duration = Duration.ZERO,
-    var idleTimeout: Duration = Duration.ZERO,
-    val sslCertificateFile: String = "",
-    val sslCertificateKeyFile: String = "",
+    val readTimeout: Duration? = null,
+    val writeTimeout: Duration? = null,
+    val idleTimeout: Duration? = null,
+    val sslCertificateFile: String? = null,
+    val sslCertificateKeyFile: String? = null,
     val debug: Boolean = false,
 ) {
-    /** True when both TLS PEM paths are set, mirroring Go's `SSLCertificateFile != "" && ...KeyFile != ""`. */
-    public val tlsEnabled: Boolean
-        get() = sslCertificateFile.isNotEmpty() && sslCertificateKeyFile.isNotEmpty()
-
-    /** Fills zero-valued timeouts with their defaults. Mirrors `provideStdLibHTTPServer`'s guards. */
-    public fun ensureDefaults() {
-        if (readTimeout <= Duration.ZERO) readTimeout = DEFAULT_READ_TIMEOUT
-        if (writeTimeout <= Duration.ZERO) writeTimeout = DEFAULT_WRITE_TIMEOUT
-        if (idleTimeout <= Duration.ZERO) idleTimeout = DEFAULT_IDLE_TIMEOUT
-    }
-
-    /** Validates the config, throwing [IllegalArgumentException] on the first problem. Mirrors `ValidateWithContext`. */
-    public fun validate() {
+    init {
         require(port in 1..65_535) { "server: port must be in 1..65535, was $port" }
         require(startupDeadline > Duration.ZERO) { "server: startupDeadline is required" }
     }
+
+    /** True when both TLS PEM paths are set, mirroring Go's `SSLCertificateFile != "" && ...KeyFile != ""`. */
+    public val tlsEnabled: Boolean
+        get() = !sslCertificateFile.isNullOrEmpty() && !sslCertificateKeyFile.isNullOrEmpty()
+
+    /** The read timeout, or [DEFAULT_READ_TIMEOUT] when unset. Mirrors `provideStdLibHTTPServer`'s guard. */
+    public fun readTimeout(): Duration = readTimeout ?: DEFAULT_READ_TIMEOUT
+
+    /** The write timeout, or [DEFAULT_WRITE_TIMEOUT] when unset. */
+    public fun writeTimeout(): Duration = writeTimeout ?: DEFAULT_WRITE_TIMEOUT
+
+    /** The idle timeout, or [DEFAULT_IDLE_TIMEOUT] when unset. */
+    public fun idleTimeout(): Duration = idleTimeout ?: DEFAULT_IDLE_TIMEOUT
 }

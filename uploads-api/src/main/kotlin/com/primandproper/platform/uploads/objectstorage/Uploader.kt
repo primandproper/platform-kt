@@ -2,6 +2,8 @@ package com.primandproper.platform.uploads.objectstorage
 
 import com.primandproper.platform.observability.Keys
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.Observer
 import com.primandproper.platform.observability.TracerProvider
 import com.primandproper.platform.observability.span
@@ -54,8 +56,8 @@ public class Uploader internal constructor(
     public constructor(
         bucket: Bucket,
         bucketName: String,
-        logger: Logger? = null,
-        tracerProvider: TracerProvider? = null,
+        logger: Logger = NoopLogger,
+        tracerProvider: TracerProvider = NoopTracerProvider,
     ) : this(Observer("${bucketName}_uploader", logger, tracerProvider), bucket)
 
     override suspend fun save(

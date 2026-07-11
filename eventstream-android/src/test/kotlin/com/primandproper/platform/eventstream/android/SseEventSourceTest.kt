@@ -8,10 +8,12 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import java.io.IOException
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 /** Consume-side coverage for SSE, driven against a real OkHttp `MockWebServer` (no device). */
 class SseEventSourceTest {
@@ -61,5 +63,31 @@ class SseEventSourceTest {
 
             assertEquals("", event.type)
             assertEquals("""{"only":"data"}""", event.payload)
+        }
+
+    @Test
+    fun `messages carry the SSE id so a caller can resume with Last-Event-ID`() =
+        runTest {
+            server.enqueue(
+                MockResponse()
+                    .setHeader("Content-Type", "text/event-stream")
+                    .setBody("id: 42\nevent: a\ndata: {\"x\":1}\n\n"),
+            )
+
+            val message = SseEventSource(OkHttpClient()).messages(request()).take(1).toList().single()
+
+            assertEquals("42", message.id)
+            assertEquals(Event("a", """{"x":1}"""), message.event)
+        }
+
+    @Test
+    fun `a non-2xx response fails the stream instead of completing normally`() =
+        runTest {
+            // okhttp-sse reports this as onFailure(t = null); the source must surface it as an error.
+            server.enqueue(MockResponse().setResponseCode(500))
+
+            assertFailsWith<IOException> {
+                SseEventSource(OkHttpClient()).events(request()).toList()
+            }
         }
 }

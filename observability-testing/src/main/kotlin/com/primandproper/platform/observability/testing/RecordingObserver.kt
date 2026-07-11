@@ -69,18 +69,33 @@ public class RecordingObserver : Observer {
 }
 
 /**
- * The [Operation] handed back by [RecordingObserver]. Records instead of executing; the recorded maps
- * and lists are public so tests read straight off them.
+ * The [Operation] handed back by [RecordingObserver]. Records instead of executing.
+ *
+ * Thread-safe: every mutation and every public read holds the per-operation [lock], and the collection
+ * properties hand back an immutable snapshot rather than the live backing collection. So a recorder
+ * calling [set] on one thread can't throw [ConcurrentModificationException] against a reader iterating
+ * [observations] (or [RecordingObserver.stream]) on another — the failure mode this double previously
+ * had despite advertising thread safety.
  */
 public class RecordingOperation internal constructor(
     private val owner: RecordingObserver,
     public val name: String,
 ) : Operation {
-    public val observations: MutableList<Observation> = mutableListOf()
-    public val values: MutableMap<String, Any?> = mutableMapOf() // Set (BOTH)
-    public val spanValues: MutableMap<String, Any?> = mutableMapOf() // Set + SpanOnly
-    public val logValues: MutableMap<String, Any?> = mutableMapOf() // Set + LogOnly
-    public val errors: MutableList<Throwable> = mutableListOf()
+    private val lock = Any()
+    private val _observations = mutableListOf<Observation>()
+    private val _values = mutableMapOf<String, Any?>() // Set (BOTH)
+    private val _spanValues = mutableMapOf<String, Any?>() // Set + SpanOnly
+    private val _logValues = mutableMapOf<String, Any?>() // Set + LogOnly
+    private val _errors = mutableListOf<Throwable>()
+
+    /** Snapshot of the observations recorded so far; safe to iterate while other threads keep recording. */
+    public val observations: List<Observation> get() = synchronized(lock) { _observations.toList() }
+    public val values: Map<String, Any?> get() = synchronized(lock) { _values.toMap() }
+    public val spanValues: Map<String, Any?> get() = synchronized(lock) { _spanValues.toMap() }
+    public val logValues: Map<String, Any?> get() = synchronized(lock) { _logValues.toMap() }
+    public val errors: List<Throwable> get() = synchronized(lock) { _errors.toList() }
+
+    @Volatile
     public var ended: Boolean = false
         private set
 
@@ -90,13 +105,15 @@ public class RecordingOperation internal constructor(
     override fun set(
         key: String,
         value: Any?,
-    ): Operation {
-        record(key, value, Pillar.BOTH)
-        values[key] = value
-        spanValues[key] = value
-        logValues[key] = value
-        return this
-    }
+    ): Operation =
+        apply {
+            synchronized(lock) {
+                appendObservation(key, value, Pillar.BOTH)
+                _values[key] = value
+                _spanValues[key] = value
+                _logValues[key] = value
+            }
+        }
 
     override fun set(vararg pairs: Pair<String, Any?>): Operation {
         for ((k, v) in pairs) set(k, v)
@@ -106,26 +123,30 @@ public class RecordingOperation internal constructor(
     override fun spanOnly(
         key: String,
         value: Any?,
-    ): Operation {
-        record(key, value, Pillar.SPAN)
-        spanValues[key] = value
-        return this
-    }
+    ): Operation =
+        apply {
+            synchronized(lock) {
+                appendObservation(key, value, Pillar.SPAN)
+                _spanValues[key] = value
+            }
+        }
 
     override fun logOnly(
         key: String,
         value: Any?,
-    ): Operation {
-        record(key, value, Pillar.LOG)
-        logValues[key] = value
-        return this
-    }
+    ): Operation =
+        apply {
+            synchronized(lock) {
+                appendObservation(key, value, Pillar.LOG)
+                _logValues[key] = value
+            }
+        }
 
     override fun <E : Throwable> error(
         err: E,
         message: String,
     ): E {
-        errors += err
+        synchronized(lock) { _errors += err }
         return err
     }
 
@@ -133,7 +154,7 @@ public class RecordingOperation internal constructor(
         err: Throwable,
         message: String,
     ) {
-        errors += err
+        synchronized(lock) { _errors += err }
     }
 
     override fun makeCurrent(): AutoCloseable = AutoCloseable {}
@@ -142,19 +163,21 @@ public class RecordingOperation internal constructor(
         ended = true
     }
 
-    private fun record(
+    /** Appends an observation. Callers must already hold [lock]. */
+    private fun appendObservation(
         key: String,
         value: Any?,
         pillar: Pillar,
     ) {
-        observations += Observation(owner.nextSeq(), key, value, pillar)
+        _observations += Observation(owner.nextSeq(), key, value, pillar)
     }
 
     /** Asserts the matchers all occur somewhere in this operation (any order). */
     public fun assertObserved(vararg matchers: Matcher) {
+        val snapshot = observations
         for (m in matchers) {
-            if (observations.none { m.matches(it) }) {
-                throw AssertionError("operation \"$name\" did not observe ${m.desc}; saw $observations")
+            if (snapshot.none { m.matches(it) }) {
+                throw AssertionError("operation \"$name\" did not observe ${m.desc}; saw $snapshot")
             }
         }
     }

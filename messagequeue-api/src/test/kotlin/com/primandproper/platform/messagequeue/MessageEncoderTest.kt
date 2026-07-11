@@ -2,30 +2,24 @@ package com.primandproper.platform.messagequeue
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class MessageEncoderTest {
     @Test
-    fun `RawMessageEncoder passes a ByteArray through verbatim`() {
+    fun `ByteArrayMessageEncoder passes a ByteArray through verbatim`() {
         val bytes = byteArrayOf(1, 2, 3)
-        assertSame(bytes, RawMessageEncoder.encode(bytes))
+        assertSame(bytes, ByteArrayMessageEncoder.encode(bytes))
     }
 
     @Test
-    fun `RawMessageEncoder UTF-8 encodes a String`() {
-        assertTrue("héllo".encodeToByteArray().contentEquals(RawMessageEncoder.encode("héllo")))
-    }
-
-    @Test
-    fun `RawMessageEncoder rejects a structured value`() {
-        assertFailsWith<IllegalArgumentException> { RawMessageEncoder.encode(42) }
+    fun `StringMessageEncoder UTF-8 encodes a String`() {
+        assertTrue("héllo".encodeToByteArray().contentEquals(StringMessageEncoder.encode("héllo")))
     }
 
     @Test
     fun `a functional MessageEncoder can be supplied`() {
-        val encoder = MessageEncoder { data -> "<$data>".encodeToByteArray() }
-        assertEquals("<x>", encoder.encode("x").decodeToString())
+        val encoder = MessageEncoder<Int> { data -> "<$data>".encodeToByteArray() }
+        assertEquals("<42>", encoder.encode(42).decodeToString())
     }
 }

@@ -57,4 +57,45 @@ class EventStreamConfigTest {
         assertEquals(0, cfg.readBufferSize)
         assertTrue(cfg.allowedOrigins.isEmpty())
     }
+
+    @Test
+    fun `empty allowlist enforces same-origin and rejects cross-origin`() {
+        val cfg = WebSocketConfig()
+        // Same host (with matching port) is allowed; a different host is not.
+        assertTrue(cfg.isOriginAllowed("https://app.example", host = "app.example"))
+        assertTrue(cfg.isOriginAllowed("http://app.example:8080", host = "app.example:8080"))
+        assertFalse(cfg.isOriginAllowed("https://evil.example", host = "app.example"))
+        // A differing port is a distinct origin and is rejected.
+        assertFalse(cfg.isOriginAllowed("https://app.example:9999", host = "app.example"))
+    }
+
+    @Test
+    fun `empty allowlist matches host case-insensitively`() {
+        val cfg = WebSocketConfig()
+        assertTrue(cfg.isOriginAllowed("https://App.Example", host = "app.example"))
+    }
+
+    @Test
+    fun `absent or blank origin is treated as an originless client and allowed`() {
+        val cfg = WebSocketConfig()
+        assertTrue(cfg.isOriginAllowed(null, host = "app.example"))
+        assertTrue(cfg.isOriginAllowed("", host = "app.example"))
+        assertTrue(cfg.isOriginAllowed("   ", host = "app.example"))
+    }
+
+    @Test
+    fun `unparseable or missing-host origin is rejected under same-origin default`() {
+        val cfg = WebSocketConfig()
+        assertFalse(cfg.isOriginAllowed("app.example", host = "app.example"))
+        assertFalse(cfg.isOriginAllowed("https://app.example", host = null))
+    }
+
+    @Test
+    fun `non-empty allowlist requires an exact origin match`() {
+        val cfg = WebSocketConfig(allowedOrigins = listOf("https://allowed.example"))
+        assertTrue(cfg.isOriginAllowed("https://allowed.example", host = "app.example"))
+        assertFalse(cfg.isOriginAllowed("https://evil.example", host = "allowed.example"))
+        // With an explicit allowlist, an absent origin is still an originless client (allowed).
+        assertTrue(cfg.isOriginAllowed(null, host = "app.example"))
+    }
 }

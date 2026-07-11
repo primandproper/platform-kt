@@ -9,6 +9,9 @@ package com.primandproper.platform.cryptography.hashing
  * purposes. Choose the implementation deliberately.
  */
 public fun interface Hasher {
-    /** Returns the lowercase hex-encoded digest of [content]. */
-    public fun hash(content: String): String
+    /** Returns the raw digest bytes of [content]. */
+    public fun hash(content: ByteArray): ByteArray
+
+    /** UTF-8-encodes [content], hashes it, and returns the lowercase hex-encoded digest. */
+    public fun hash(content: String): String = hash(content.toByteArray(Charsets.UTF_8)).toHexLower()
 }

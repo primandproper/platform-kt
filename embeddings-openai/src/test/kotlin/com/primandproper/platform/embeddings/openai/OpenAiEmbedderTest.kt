@@ -1,7 +1,7 @@
 package com.primandproper.platform.embeddings.openai
 
 import com.primandproper.platform.circuitbreaking.CircuitBreaker
-import com.primandproper.platform.circuitbreaking.ErrCircuitBroken
+import com.primandproper.platform.circuitbreaking.CircuitBrokenException
 import com.primandproper.platform.circuitbreaking.NoopCircuitBreaker
 import com.primandproper.platform.circuitbreaking.RecordingCircuitBreaker
 import com.primandproper.platform.embeddings.EmbeddingInput
@@ -18,6 +18,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.io.IOException
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
@@ -82,7 +83,7 @@ class OpenAiEmbedderTest {
             assertEquals("text-embedding-3-small", result.model)
             assertEquals("openai", result.provider)
             assertEquals(3, result.dimensions)
-            assertEquals(listOf(0.1f, 0.2f, 0.3f), result.vector)
+            assertContentEquals(floatArrayOf(0.1f, 0.2f, 0.3f), result.vector)
             assertNotNull(result.generatedAt)
 
             obs.assertObservedOperationWithValues(
@@ -202,7 +203,7 @@ class OpenAiEmbedderTest {
             val (embedder, _, fake) = recording(breaker = breaker)
 
             val error = assertFailsWith<Throwable> { embedder.generateEmbedding(EmbeddingInput(content = "hello")) }
-            assertEquals(ErrCircuitBroken, error)
+            assertTrue(error is CircuitBrokenException)
             assertTrue(fake.requests.isEmpty())
             assertEquals(1, breaker.rejectionCount)
         }

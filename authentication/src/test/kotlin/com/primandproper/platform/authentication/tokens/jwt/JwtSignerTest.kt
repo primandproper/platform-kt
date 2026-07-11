@@ -1,11 +1,12 @@
 package com.primandproper.platform.authentication.tokens.jwt
 
-import com.primandproper.platform.authentication.tokens.ErrInvalidAudience
-import com.primandproper.platform.authentication.tokens.ErrInvalidIssuer
-import com.primandproper.platform.authentication.tokens.ErrReservedClaim
-import com.primandproper.platform.authentication.tokens.ErrTokenExpired
-import com.primandproper.platform.authentication.tokens.ErrTokenNotYetValid
+import com.primandproper.platform.authentication.tokens.InvalidAudienceException
+import com.primandproper.platform.authentication.tokens.InvalidIssuerException
 import com.primandproper.platform.authentication.tokens.Issuer
+import com.primandproper.platform.authentication.tokens.ReservedClaimException
+import com.primandproper.platform.authentication.tokens.TokenExpiredException
+import com.primandproper.platform.authentication.tokens.TokenLifetimeExceededException
+import com.primandproper.platform.authentication.tokens.TokenNotYetValidException
 import com.primandproper.platform.errors.isError
 import kotlinx.coroutines.test.runTest
 import java.time.Clock
@@ -16,7 +17,9 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
 
 private const val ISSUER = "platform-test"
@@ -64,9 +67,9 @@ class JwtSignerTest {
                 )
 
             val claims = signer.parseToken(issued.token)
-            assertEquals("account_123" to true, claims.getString("account_id"))
-            assertEquals("session_456" to true, claims.getString("sid"))
-            assertEquals("account_123" to true, claims.get("account_id"))
+            assertEquals("account_123", claims.getStringOrNull("account_id"))
+            assertEquals("session_456", claims.getStringOrNull("sid"))
+            assertEquals("account_123", claims["account_id"])
         }
 
     @Test
@@ -76,8 +79,8 @@ class JwtSignerTest {
             val issued = signer.issueToken(SUBJECT, EXAMPLE_EXPIRY)
             val claims = signer.parseToken(issued.token)
 
-            assertEquals("" to false, claims.getString("sid"))
-            assertEquals(null to false, claims.get("sid"))
+            assertNull(claims.getStringOrNull("sid"))
+            assertNull(claims["sid"])
         }
 
     @Test
@@ -88,7 +91,7 @@ class JwtSignerTest {
                 assertFailsWith<Throwable> {
                     signer.issueToken(SUBJECT, EXAMPLE_EXPIRY, mapOf("sub" to "attacker_id"))
                 }
-            assertTrue(isError(ex, ErrReservedClaim))
+            assertTrue(isError<ReservedClaimException>(ex))
         }
 
     @Test
@@ -98,7 +101,7 @@ class JwtSignerTest {
             // A parser whose clock is past the token's exp must reject it.
             val laterSigner = signerAt(FIXED_NOW.plusSeconds(EXAMPLE_EXPIRY.inWholeSeconds + 60))
             val ex = assertFailsWith<Throwable> { laterSigner.parseToken(issued.token) }
-            assertTrue(isError(ex, ErrTokenExpired))
+            assertTrue(isError<TokenExpiredException>(ex))
         }
 
     @Test
@@ -108,7 +111,7 @@ class JwtSignerTest {
             // nbf is now-60s; a parser two minutes in the past sees nbf in the future.
             val earlierSigner = signerAt(FIXED_NOW.minusSeconds(120))
             val ex = assertFailsWith<Throwable> { earlierSigner.parseToken(issued.token) }
-            assertTrue(isError(ex, ErrTokenNotYetValid))
+            assertTrue(isError<TokenNotYetValidException>(ex))
         }
 
     @Test
@@ -117,7 +120,7 @@ class JwtSignerTest {
             val issued = signerAt(FIXED_NOW, audience = "aud-A").issueToken(SUBJECT, EXAMPLE_EXPIRY)
             val otherAudience = signerAt(FIXED_NOW, audience = "aud-B")
             val ex = assertFailsWith<Throwable> { otherAudience.parseToken(issued.token) }
-            assertTrue(isError(ex, ErrInvalidAudience))
+            assertTrue(isError<InvalidAudienceException>(ex))
         }
 
     @Test
@@ -126,7 +129,7 @@ class JwtSignerTest {
             val issued = signerAt(FIXED_NOW, issuer = "iss-A").issueToken(SUBJECT, EXAMPLE_EXPIRY)
             val otherIssuer = signerAt(FIXED_NOW, issuer = "iss-B")
             val ex = assertFailsWith<Throwable> { otherIssuer.parseToken(issued.token) }
-            assertTrue(isError(ex, ErrInvalidIssuer))
+            assertTrue(isError<InvalidIssuerException>(ex))
         }
 
     @Test
@@ -155,9 +158,42 @@ class JwtSignerTest {
         runTest {
             val signer = signerAt(FIXED_NOW)
             val issued = signer.issueToken(SUBJECT, EXAMPLE_EXPIRY)
-            val lastChar = issued.token.last()
-            val tampered = issued.token.dropLast(1) + if (lastChar == 'A') 'B' else 'A'
+            // Tamper a character in the MIDDLE of the signature segment. Toggling the final base64url
+            // char is unreliable: a 32-byte HS256 signature encodes to 43 chars whose last char carries
+            // two unused padding bits, so flipping it can decode to the identical signature. A middle
+            // character's bits are all significant, so a one-character change always alters the bytes.
+            val (header, payload, signature) = issued.token.split(".")
+            val at = signature.length / 2
+            val flipped = if (signature[at] == 'A') 'B' else 'A'
+            val tamperedSignature = signature.substring(0, at) + flipped + signature.substring(at + 1)
+            val tampered = "$header.$payload.$tamperedSignature"
             assertFailsWith<IllegalArgumentException> { signer.parseToken(tampered) }
+        }
+
+    @Test
+    fun `rejects a requested lifetime exceeding the configured ceiling`() =
+        runTest {
+            // A signer with a 1-hour ceiling must reject a 2-hour request rather than silently mint it.
+            val signer = newJwtSigner(ISSUER, AUDIENCE, SIGNING_KEY, clock = Clock.fixed(FIXED_NOW, ZoneOffset.UTC), maxLifetime = 1.hours)
+            val ex = assertFailsWith<Throwable> { signer.issueToken(SUBJECT, 2.hours) }
+            assertTrue(isError<TokenLifetimeExceededException>(ex))
+        }
+
+    @Test
+    fun `allows a requested lifetime at or below the configured ceiling`() =
+        runTest {
+            val signer = newJwtSigner(ISSUER, AUDIENCE, SIGNING_KEY, clock = Clock.fixed(FIXED_NOW, ZoneOffset.UTC), maxLifetime = 1.hours)
+            val issued = signer.issueToken(SUBJECT, 1.hours)
+            assertTrue(issued.token.isNotEmpty())
+        }
+
+    @Test
+    fun `a zero ceiling leaves lifetimes unbounded`() =
+        runTest {
+            // maxLifetime defaults to ZERO, which disables the ceiling entirely.
+            val signer = signerAt(FIXED_NOW)
+            val issued = signer.issueToken(SUBJECT, (24 * 365).hours)
+            assertTrue(issued.token.isNotEmpty())
         }
 
     @Test

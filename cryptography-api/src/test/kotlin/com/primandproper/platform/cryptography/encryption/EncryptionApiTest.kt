@@ -1,13 +1,13 @@
 package com.primandproper.platform.cryptography.encryption
 
-import com.primandproper.platform.cryptography.encryption.config.Config
-import com.primandproper.platform.cryptography.encryption.config.Provider
+import com.primandproper.platform.cryptography.encryption.config.EncryptionProvider
 import com.primandproper.platform.cryptography.encryption.mock.EncryptorDecryptorMock
 import com.primandproper.platform.cryptography.encryption.noop.noopEncryptorDecryptor
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 
 class ErrorsTest {
     @Test
@@ -26,25 +26,26 @@ class ErrorsTest {
     }
 }
 
-class ConfigValidateTest {
+class EncryptionProviderTest {
     @Test
-    fun aesProviderValidates() {
-        Config(provider = Provider.AES).validate()
+    fun knownProvidersResolveFromValue() {
+        assertEquals(EncryptionProvider.AES, EncryptionProvider.fromValue("aes"))
+        assertEquals(EncryptionProvider.SALSA20, EncryptionProvider.fromValue("salsa20"))
     }
 
     @Test
-    fun salsa20ProviderValidates() {
-        Config(provider = Provider.SALSA20).validate()
+    fun fromValueTrimsAndLowercases() {
+        assertEquals(EncryptionProvider.AES, EncryptionProvider.fromValue("  AES "))
     }
 
     @Test
-    fun emptyProviderErrors() {
-        assertFailsWith<IllegalArgumentException> { Config().validate() }
+    fun emptyProviderResolvesToNull() {
+        assertNull(EncryptionProvider.fromValue(""))
     }
 
     @Test
-    fun invalidProviderErrors() {
-        assertFailsWith<IllegalArgumentException> { Config(provider = "invalid").validate() }
+    fun unknownProviderResolvesToNull() {
+        assertNull(EncryptionProvider.fromValue("invalid"))
     }
 }
 

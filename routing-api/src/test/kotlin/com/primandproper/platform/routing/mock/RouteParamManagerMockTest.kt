@@ -1,5 +1,7 @@
 package com.primandproper.platform.routing.mock
 
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.routing.HttpMethod
 import com.primandproper.platform.routing.RoutingRequest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -8,7 +10,7 @@ import kotlin.test.assertFailsWith
 private class FakeRequest(
     private val params: Map<String, String>,
 ) : RoutingRequest {
-    override val method: String = "GET"
+    override val method: HttpMethod = HttpMethod.GET
     override val path: String = "/"
 
     override fun pathParameter(key: String): String? = params[key]
@@ -35,7 +37,7 @@ class RouteParamManagerMockTest {
     fun `an unmocked method throws`() {
         val mock = RouteParamManagerMock()
         assertFailsWith<IllegalStateException> {
-            mock.buildRouteParamIDFetcher(null, "id", "thing")
+            mock.buildRouteParamIDFetcher(NoopLogger, "id", "thing")
         }
     }
 }

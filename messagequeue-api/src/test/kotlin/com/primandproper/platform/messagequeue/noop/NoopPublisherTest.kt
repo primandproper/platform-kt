@@ -9,18 +9,18 @@ class NoopPublisherTest {
     @Test
     fun `provider hands out a publisher, pings, and closes`() =
         runTest {
-            val provider = NoopPublisherProvider()
-            assertNotNull(provider.providePublisher("topic"))
+            val provider = NoopPublisherProvider<String>()
+            assertNotNull(provider.publisher("topic"))
             provider.ping()
             provider.close()
         }
 
     @Test
-    fun `publisher discards every publish and stop`() =
+    fun `publisher discards every publish and close`() =
         runTest {
-            val publisher = NoopPublisher()
+            val publisher = NoopPublisher<String>()
             publisher.publish("data")
             publisher.publishAsync("data")
-            publisher.stop()
+            publisher.close()
         }
 }

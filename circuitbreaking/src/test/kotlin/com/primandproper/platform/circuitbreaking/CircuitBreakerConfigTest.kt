@@ -8,69 +8,54 @@ import kotlin.time.Duration.Companion.seconds
 
 class CircuitBreakerConfigTest {
     @Test
-    fun validatesAValidConfig() {
-        CircuitBreakerConfig().apply {
-            name = "svc"
-            failureThreshold = 5
-            resetTimeout = 10.seconds
-            halfOpenMaxProbes = 2
-        }.validate() // does not throw
+    fun buildsAValidConfig() {
+        CircuitBreakerConfig(
+            name = "svc",
+            failureThreshold = 5,
+            resetTimeout = 10.seconds,
+            halfOpenMaxProbes = 2,
+        ) // does not throw
     }
 
     @Test
     fun rejectsMissingName() {
         assertFailsWith<IllegalArgumentException> {
-            CircuitBreakerConfig().apply { name = "" }.validate()
+            CircuitBreakerConfig(name = "")
         }
     }
 
     @Test
     fun rejectsNonPositiveThreshold() {
         assertFailsWith<IllegalArgumentException> {
-            CircuitBreakerConfig().apply {
-                name = "svc"
-                failureThreshold = 0
-            }.validate()
+            CircuitBreakerConfig(name = "svc", failureThreshold = 0)
         }
     }
 
     @Test
     fun rejectsZeroResetTimeout() {
         assertFailsWith<IllegalArgumentException> {
-            CircuitBreakerConfig().apply {
-                name = "svc"
-                resetTimeout = Duration.ZERO
-            }.validate()
+            CircuitBreakerConfig(name = "svc", resetTimeout = Duration.ZERO)
         }
     }
 
     @Test
-    fun ensureDefaultsFillsUnsetFields() {
-        val cfg =
-            CircuitBreakerConfig().apply {
-                name = ""
-                failureThreshold = 0
-                resetTimeout = Duration.ZERO
-                halfOpenMaxProbes = 0
-            }
-        cfg.ensureDefaults()
+    fun omittedNumericFieldsResolveToTheirDefaults() {
+        val cfg = CircuitBreakerConfig(name = "svc")
 
-        assertEquals(DEFAULT_NAME, cfg.name)
         assertEquals(DEFAULT_FAILURE_THRESHOLD, cfg.failureThreshold)
         assertEquals(DEFAULT_RESET_TIMEOUT, cfg.resetTimeout)
         assertEquals(DEFAULT_HALF_OPEN_MAX_PROBES, cfg.halfOpenMaxProbes)
     }
 
     @Test
-    fun ensureDefaultsDoesNotOverrideSetValues() {
+    fun explicitFieldsArePreserved() {
         val cfg =
-            CircuitBreakerConfig().apply {
-                name = "svc"
-                failureThreshold = 7
-                resetTimeout = 5.seconds
-                halfOpenMaxProbes = 3
-            }
-        cfg.ensureDefaults()
+            CircuitBreakerConfig(
+                name = "svc",
+                failureThreshold = 7,
+                resetTimeout = 5.seconds,
+                halfOpenMaxProbes = 3,
+            )
 
         assertEquals("svc", cfg.name)
         assertEquals(7, cfg.failureThreshold)

@@ -46,7 +46,7 @@ class CheckersTest {
             val checker = DatabaseChecker("postgres", MockDbClient(ready = false))
 
             val thrown = assertFailsWith<Throwable> { checker.check() }
-            assertSame(ErrDatabaseNotReady, thrown)
+            assertTrue(thrown is DatabaseNotReadyException)
         }
 
     @Test

@@ -1,5 +1,6 @@
 package com.primandproper.platform.capitalism.mock
 
+import com.primandproper.platform.capitalism.Currency
 import com.primandproper.platform.capitalism.CustomerCreationInput
 import com.primandproper.platform.capitalism.PaymentIntent
 import com.primandproper.platform.capitalism.PaymentIntentCreationInput
@@ -24,7 +25,10 @@ class PaymentManagerMockTest {
 
             mock.handleEventWebhook("{}".toByteArray(), "sig")
             assertEquals("cus_a@b.c", mock.createCustomer(CustomerCreationInput(email = "a@b.c")))
-            assertEquals("cs_1000", mock.createPaymentIntent(PaymentIntentCreationInput(amount = 1000, currency = "usd")).clientSecret)
+            assertEquals(
+                "cs_1000",
+                mock.createPaymentIntent(PaymentIntentCreationInput(amount = 1000, currency = Currency("usd"))).clientSecret,
+            )
             assertEquals("sub_price_1", mock.createSubscription(SubscriptionCreationInput(customerID = "c", priceID = "price_1")))
 
             assertEquals(1, mock.handleEventWebhookCalls.size)

@@ -4,10 +4,12 @@ import com.primandproper.platform.uploads.Attributes
 import com.primandproper.platform.uploads.ObjectInfo
 import com.primandproper.platform.uploads.SaveOptions
 import com.primandproper.platform.uploads.SignedUrlOptions
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.io.ByteArrayInputStream
 import java.io.InputStream
 import java.time.Instant
@@ -37,7 +39,8 @@ public class MemoryBucket : Bucket {
         source: InputStream,
         options: SaveOptions,
     ): Long {
-        val data = source.readBytes()
+        // readBytes() drains the stream with blocking reads; hop off the caller's dispatcher.
+        val data = withContext(Dispatchers.IO) { source.readBytes() }
         val contentType = options.contentType ?: sniffContentType(data)
         mutex.withLock {
             objects[path] = StoredObject(data, contentType, options.cacheControl, Instant.now())
