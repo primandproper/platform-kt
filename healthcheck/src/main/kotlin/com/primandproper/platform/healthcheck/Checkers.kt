@@ -4,14 +4,14 @@ import com.primandproper.platform.errors.PlatformException
 import com.primandproper.platform.errors.newError
 
 /**
- * Signals that a database is not ready to serve. Port of platform-go's `database.ErrDatabaseNotReady`,
- * returned by the database checker when the client reports it is not yet ready.
+ * Thrown when a database is not ready to serve. Port of platform-go's `database.ErrDatabaseNotReady`,
+ * raised by the database checker when the client reports it is not yet ready.
  *
- * In platform-go this sentinel lives in the `database` package. Until `:database-api` is ported it is
- * kept here so the checker has a canonical value to raise (the same temporary-ownership pattern
- * `:circuitbreaking` uses for `ErrCircuitBroken`); it should move once the database module lands.
+ * In platform-go this type lives in the `database` package. It is declared here so the checker has a
+ * canonical type to raise without depending on a database module; it should move once that module is
+ * wired into this checker.
  */
-public val ErrDatabaseNotReady: PlatformException = newError("database is not ready yet")
+public class DatabaseNotReadyException : PlatformException("database is not ready yet")
 
 /**
  * The minimal readiness surface a database client exposes to the health system. Port of platform-go's
@@ -38,7 +38,7 @@ private class DatabaseCheckerImpl(
 ) : Checker {
     override suspend fun check() {
         if (client == null) throw newError("database client is nil")
-        if (!client.isReady()) throw ErrDatabaseNotReady
+        if (!client.isReady()) throw DatabaseNotReadyException()
     }
 }
 

@@ -26,12 +26,9 @@ public interface TracerProvider {
 
 /** Builds a named tracer, mirroring `tracing.NewNamedTracer`. */
 public fun namedTracer(
-    provider: TracerProvider?,
+    provider: TracerProvider = NoopTracerProvider,
     name: String,
-): Tracer = ensureTracerProvider(provider).tracer(name)
-
-/** Returns [provider] if non-null, otherwise a [NoopTracerProvider]. Mirrors `EnsureTracerProvider`. */
-public fun ensureTracerProvider(provider: TracerProvider?): TracerProvider = provider ?: NoopTracerProvider
+): Tracer = provider.tracer(name)
 
 /** A tracer whose spans never record. The safe default and the test stand-in. */
 public object NoopTracer : Tracer {

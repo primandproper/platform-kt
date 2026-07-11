@@ -6,8 +6,11 @@
 # JitPack only ever compiles the pure-JVM modules and never needs the Android SDK. That's what lets
 # a server/JVM project consume these artifacts without any Android tooling on either side.
 #
-# To also publish the Android (.aar) modules via JitPack, drop `-PjvmOnly` — but then JitPack's
-# build image must provide the Android SDK for the project's compileSdk.
+# Division of labor: this JitPack flow serves the pure-JVM modules (no Android tooling required),
+# and the ten Android `.aar` modules are published to GitHub Packages by a dedicated tag-triggered
+# CI job (.github/workflows/publish.yml — P1-7's option B). That job reuses CI's Android SDK setup
+# and runs the full (non-jvmOnly) publish, so a failure there can never regress this JVM flow. See
+# README → "Android modules" for the GitHub Packages coordinates and consumer setup.
 jdk:
   - openjdk17
 install:

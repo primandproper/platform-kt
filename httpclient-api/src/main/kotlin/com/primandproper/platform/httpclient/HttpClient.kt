@@ -1,5 +1,7 @@
 package com.primandproper.platform.httpclient
 
+import com.primandproper.platform.observability.SuspendCloseable
+
 /**
  * The traced HTTP client contract — the keystone every networked package (`llm`, `embeddings`,
  * `uploads`, …) calls through. Coroutine-native: [execute] is a `suspend` function, so a call made
@@ -11,12 +13,15 @@ package com.primandproper.platform.httpclient
  * backend for the Ktor (server) one without touching call sites — the same seam `Observer` gives
  * observability.
  */
-public interface HttpClient {
+public interface HttpClient : SuspendCloseable {
     /** Executes [request] and returns a fully-buffered [HttpResponse]. Suspends until complete. */
     public suspend fun execute(request: HttpRequest): HttpResponse
 
-    /** Releases the backend's connection pool / dispatcher. Idempotent; safe to skip for short-lived clients. */
-    public fun close() {}
+    /**
+     * Releases the backend's connection pool / dispatcher. Idempotent; safe to skip for short-lived
+     * clients. `suspend` via [SuspendCloseable] so a backend may drain in-flight work without blocking.
+     */
+    override suspend fun close() {}
 }
 
 /** A client that does nothing and returns an empty `200`. The safe default where a real one is optional. */

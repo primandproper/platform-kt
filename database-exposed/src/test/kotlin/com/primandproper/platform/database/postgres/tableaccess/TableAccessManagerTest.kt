@@ -1,6 +1,7 @@
 package com.primandproper.platform.database.postgres.tableaccess
 
 import com.primandproper.platform.errors.PlatformException
+import com.primandproper.platform.observability.testing.RecordingObserver
 import kotlinx.coroutines.test.runTest
 import javax.sql.DataSource
 import kotlin.test.Test
@@ -61,6 +62,40 @@ class TableAccessManagerTest {
             assertFailsWith<PlatformException> {
                 manager.grantUserAccessToTable("admin", "public", "users", "DROP")
             }
+        }
+
+    @Test
+    fun `createUser records the username on a span but never the password`() =
+        runTest {
+            val obs = RecordingObserver()
+            val manager = TableAccessManager(throwingDataSource(), obs)
+
+            // The throwing DataSource fails the DDL, but the span attributes are set beforehand.
+            assertFailsWith<Throwable> { manager.createUser("admin", "hunter2") }
+
+            val op = obs.operations.single { it.name == "CreateUser" }
+            assertEquals("admin", op.values["db.user.name"])
+            assertFalse(
+                op.spanValues.values.any { it == "hunter2" } || op.logValues.values.any { it == "hunter2" },
+                "the password must never reach the span or the log",
+            )
+            assertTrue(op.errors.isNotEmpty(), "the failed DDL must be recorded on the span")
+        }
+
+    @Test
+    fun `grantUserAccessToTable records the grant target and marks an invalid privilege failed`() =
+        runTest {
+            val obs = RecordingObserver()
+            val manager = TableAccessManager(throwingDataSource(), obs)
+
+            assertFailsWith<PlatformException> {
+                manager.grantUserAccessToTable("admin", "public", "users", "DROP")
+            }
+
+            val op = obs.operations.single { it.name == "GrantUserAccessToTable" }
+            assertEquals("admin", op.values["db.user.name"])
+            assertEquals("users", op.values["db.table"])
+            assertTrue(op.errors.isNotEmpty(), "the rejected privilege must be recorded on the span")
         }
 
     /** A [DataSource] whose every method throws — proves the privilege check short-circuits before any query. */

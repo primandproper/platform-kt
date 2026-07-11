@@ -9,6 +9,10 @@ import kotlin.time.Duration.Companion.nanoseconds
  * and [retryWithPolicy]. Stateful: each [next] call returns the delay to sleep for the current
  * attempt and advances to the next one, mirroring the `delay` variable threaded through
  * platform-go's `Execute` loop.
+ *
+ * Because that state escalates and never resets, one instance corresponds to exactly one retry
+ * sequence: callers construct a fresh [Backoff] at the start of each `execute()` invocation / Flow
+ * collection rather than sharing it on a long-lived object, so the mutation here is never contended.
  */
 internal class Backoff(
     initialDelay: Duration,

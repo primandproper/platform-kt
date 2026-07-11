@@ -1,6 +1,7 @@
 package com.primandproper.platform.circuitbreaking.partitioned
 
-import com.primandproper.platform.circuitbreaking.ErrCircuitBroken
+import com.primandproper.platform.circuitbreaking.CircuitBreakerConfig
+import com.primandproper.platform.circuitbreaking.CircuitBrokenException
 import com.primandproper.platform.circuitbreaking.RecordingCircuitBreaker
 import com.primandproper.platform.errors.PlatformException
 import com.primandproper.platform.errors.isError
@@ -40,6 +41,32 @@ class KeyedCircuitBreakerTest {
     }
 
     @Test
+    fun configFactoryFailsLoudlyOnInvalidBaseConfig() {
+        // README contract: misconfiguration fails loudly at startup rather than degrading to a noop.
+        assertFailsWith<IllegalArgumentException> {
+            KeyedCircuitBreaker(KeyedCircuitBreakerConfig(base = CircuitBreakerConfig(name = "svc", failureThreshold = -1)))
+        }
+    }
+
+    @Test
+    fun configFactoryFailsLoudlyOnBlankPartitionKey() {
+        assertFailsWith<IllegalArgumentException> {
+            KeyedCircuitBreaker(
+                KeyedCircuitBreakerConfig(base = CircuitBreakerConfig(name = "svc"), keys = listOf("")),
+            )
+        }
+    }
+
+    @Test
+    fun configFactoryBuildsForValidConfig() {
+        val keyed =
+            KeyedCircuitBreaker(
+                KeyedCircuitBreakerConfig(base = CircuitBreakerConfig(name = "svc"), keys = listOf("tenant-1")),
+            )
+        assertTrue(keyed is DefaultKeyedCircuitBreaker)
+    }
+
+    @Test
     fun breaksOneKeyInIsolation() =
         runTest {
             // The broken tenant is pinned open; the healthy global breaker keeps other tenants flowing.
@@ -48,7 +75,7 @@ class KeyedCircuitBreakerTest {
             val keyed = KeyedCircuitBreaker(global, mapOf("123" to broken))
 
             val thrown = assertFailsWith<PlatformException> { keyed.forKey("123").execute { "unreachable" } }
-            assertTrue(isError(thrown, ErrCircuitBroken))
+            assertTrue(isError<CircuitBrokenException>(thrown))
 
             assertEquals("ok", keyed.forKey("456").execute { "ok" })
             assertEquals(1, global.successCount)

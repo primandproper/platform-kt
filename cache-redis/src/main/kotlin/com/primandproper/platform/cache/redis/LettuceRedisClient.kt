@@ -1,5 +1,6 @@
 package com.primandproper.platform.cache.redis
 
+import com.primandproper.platform.errors.PlatformException
 import io.lettuce.core.RedisURI
 import io.lettuce.core.ScriptOutputType
 import io.lettuce.core.SetArgs
@@ -24,11 +25,23 @@ import java.time.Duration as JavaDuration
  * TODO(cluster): platform-go's `buildRedisClient` also constructs a `redis.NewClusterClient` for
  * multi-address / `Cluster` configs. Cluster support here (a `RedisClusterClient`-backed adapter)
  * is a documented seam; a single-node [LettuceRedisClient] is the primary backend. The slot-bucketing
- * in [RedisCache] is client-agnostic and already in place for when the cluster adapter lands.
+ * in [RedisCache] is client-agnostic and already in place for when the cluster adapter lands. Until it
+ * does, this standalone adapter **rejects** a cluster config at construction (see [UnsupportedClusterConfigException])
+ * rather than silently pinning to the first seed address and failing to follow `MOVED`/`ASK` redirects.
  */
 public class LettuceRedisClient(
     private val config: RedisCacheConfig,
 ) : RedisClient, AutoCloseable {
+    init {
+        // A single standalone connection cannot follow cluster redirects, so a cluster config would
+        // build a client that quietly routes every multi-slot batch to one node (CROSSSLOT / wrong
+        // node). Fail loudly here until the cluster adapter lands; an injected cluster-aware
+        // RedisClient override remains the escape hatch.
+        if (config.clusterMode()) {
+            throw UnsupportedClusterConfigException(config.queueAddresses)
+        }
+    }
+
     private val mutex = Mutex()
 
     @Volatile
@@ -133,3 +146,16 @@ return #KEYS
 """
     }
 }
+
+/**
+ * Thrown when a Redis Cluster config (the [RedisCacheConfig.cluster] flag or more than one seed
+ * address) is handed to the standalone [LettuceRedisClient], which cannot follow cluster redirects.
+ * A documented seam until a `RedisClusterClient`-backed adapter lands; callers needing cluster support
+ * today must inject their own cluster-aware [RedisClient].
+ */
+public class UnsupportedClusterConfigException(
+    addresses: List<String>,
+) : PlatformException(
+        "redis cluster mode is not yet supported by the standalone LettuceRedisClient " +
+            "(addresses=$addresses); inject a cluster-aware RedisClient until the cluster adapter lands",
+    )

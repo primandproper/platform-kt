@@ -10,6 +10,12 @@ import com.primandproper.platform.cryptography.encryption.EncryptorDecryptor
 public fun noopEncryptorDecryptor(): EncryptorDecryptor = NoopEncryptorDecryptor
 
 private object NoopEncryptorDecryptor : EncryptorDecryptor {
+    override suspend fun encrypt(plaintext: ByteArray): ByteArray = plaintext
+
+    override suspend fun decrypt(ciphertext: ByteArray): ByteArray = ciphertext
+
+    // Override the String conveniences too so the null-object stays truly transparent: the default
+    // implementations would base64-encode, whereas a noop must return its String input unchanged.
     override suspend fun encrypt(content: String): String = content
 
     override suspend fun decrypt(content: String): String = content

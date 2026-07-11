@@ -1,7 +1,7 @@
 package com.primandproper.platform.routing
 
 import com.primandproper.platform.observability.Logger
-import com.primandproper.platform.observability.ensureLogger
+import com.primandproper.platform.observability.NoopLogger
 
 /**
  * Builds route-param fetchers for a router. Direct port of Go's `routing.RouteParamManager`.
@@ -20,7 +20,7 @@ public interface RouteParamManager {
      * from a real ID of 0, so, like Go, it always logs rather than swallowing the error.
      */
     public fun buildRouteParamIDFetcher(
-        logger: Logger?,
+        logger: Logger = NoopLogger,
         key: String,
         logDescription: String,
     ): (RoutingRequest) -> ULong
@@ -35,11 +35,11 @@ public interface RouteParamManager {
  * behavior.
  */
 public fun buildRouteParamIDFetcher(
-    logger: Logger?,
+    logger: Logger = NoopLogger,
     key: String,
     logDescription: String,
 ): (RoutingRequest) -> ULong {
-    val log = ensureLogger(logger)
+    val log = logger
     return { req ->
         val raw = req.pathParameter(key) ?: ""
         val parsed = raw.toULongOrNull()
@@ -61,7 +61,7 @@ public fun buildRouteParamIDFetcher(
  */
 public object DefaultRouteParamManager : RouteParamManager {
     override fun buildRouteParamIDFetcher(
-        logger: Logger?,
+        logger: Logger,
         key: String,
         logDescription: String,
     ): (RoutingRequest) -> ULong =

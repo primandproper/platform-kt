@@ -6,8 +6,9 @@ import com.primandproper.platform.capitalism.PaymentIntentCreationInput
 import com.primandproper.platform.capitalism.PaymentManager
 import com.primandproper.platform.capitalism.SubscriptionCreationInput
 import com.primandproper.platform.errors.PlatformException
-import com.primandproper.platform.errors.newError
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.Observer
 import com.primandproper.platform.observability.TracerProvider
 import com.primandproper.platform.observability.span
@@ -43,8 +44,8 @@ private const val MAX_WEBHOOK_BODY_BYTES: Int = 64 shl 10 // 64 KiB
  * needs only the webhook secret, so the key is optional at construction; outbound operations require
  * it. Port of platform-go's `stripe.ErrAPIKeyNotConfigured`.
  */
-public val ErrApiKeyNotConfigured: PlatformException =
-    newError("stripe API key not configured; set the API key to use outbound operations")
+public class ApiKeyNotConfiguredException :
+    PlatformException("stripe API key not configured; set the API key to use outbound operations")
 
 /**
  * An optional callback invoked with each verified Stripe [Event], letting a consumer act on a webhook
@@ -144,7 +145,7 @@ public class StripePaymentManager internal constructor(
 
     override suspend fun createCustomer(input: CustomerCreationInput): String =
         o11y.span("CreateCustomer") {
-            val api = client ?: throw error(ErrApiKeyNotConfigured, "creating customer")
+            val api = client ?: throw error(ApiKeyNotConfiguredException(), "creating customer")
             val id = withContext(Dispatchers.IO) { api.createCustomer(input) }
             set("stripe.customer_id", id)
             id
@@ -152,7 +153,7 @@ public class StripePaymentManager internal constructor(
 
     override suspend fun createPaymentIntent(input: PaymentIntentCreationInput): PaymentIntent =
         o11y.span("CreatePaymentIntent") {
-            val api = client ?: throw error(ErrApiKeyNotConfigured, "creating payment intent")
+            val api = client ?: throw error(ApiKeyNotConfiguredException(), "creating payment intent")
             val intent = withContext(Dispatchers.IO) { api.createPaymentIntent(input) }
             set("stripe.payment_intent_id", intent.id)
             intent
@@ -160,7 +161,7 @@ public class StripePaymentManager internal constructor(
 
     override suspend fun createSubscription(input: SubscriptionCreationInput): String =
         o11y.span("CreateSubscription") {
-            val api = client ?: throw error(ErrApiKeyNotConfigured, "creating subscription")
+            val api = client ?: throw error(ApiKeyNotConfiguredException(), "creating subscription")
             val id = withContext(Dispatchers.IO) { api.createSubscription(input) }
             set("stripe.subscription_id", id)
             id
@@ -171,7 +172,7 @@ public class StripePaymentManager internal constructor(
  * Builds a Stripe-backed [PaymentManager]. Port of platform-go's `ProvideStripePaymentManager`.
  *
  * When [StripeConfig.apiKey] is set, a [StripeClient] is initialized for outbound operations; otherwise
- * only the inbound webhook path works (a create then throws [ErrApiKeyNotConfigured]). [handler] is
+ * only the inbound webhook path works (a create then throws [ApiKeyNotConfiguredException]). [handler] is
  * optional and invoked for every verified event. Unlike Go's factory there is no nil-config branch —
  * [StripeConfig] is non-null by type — and, matching Go, the factory does not itself require the
  * webhook secret (see [StripeConfig.validate]).
@@ -182,8 +183,8 @@ public class StripePaymentManager internal constructor(
 public fun StripePaymentManager(
     config: StripeConfig,
     handler: EventHandler? = null,
-    logger: Logger? = null,
-    tracerProvider: TracerProvider? = null,
+    logger: Logger = NoopLogger,
+    tracerProvider: TracerProvider = NoopTracerProvider,
 ): StripePaymentManager {
     val client =
         if (config.apiKey.isNotEmpty()) {
@@ -221,7 +222,7 @@ internal class RealStripeApiClient(
             PaymentIntentCreateParams
                 .builder()
                 .setAmount(input.amount)
-                .setCurrency(input.currency)
+                .setCurrency(input.currency.code.lowercase())
                 .apply {
                     if (input.customerID.isNotEmpty()) setCustomer(input.customerID)
                     if (input.description.isNotEmpty()) setDescription(input.description)
@@ -245,11 +246,12 @@ internal class RealStripeApiClient(
 
     /**
      * Attaches an idempotency key when provided so a create is safely retryable — the analog of Go's
-     * `applyRequestParams` calling `p.SetIdempotencyKey`. An empty key leaves the option unset.
+     * `applyRequestParams` calling `p.SetIdempotencyKey`. A `null` (or blank) key leaves the option
+     * unset.
      */
-    private fun requestOptions(idempotencyKey: String): RequestOptions =
+    private fun requestOptions(idempotencyKey: String?): RequestOptions =
         RequestOptions
             .builder()
-            .apply { if (idempotencyKey.isNotEmpty()) setIdempotencyKey(idempotencyKey) }
+            .apply { if (!idempotencyKey.isNullOrEmpty()) setIdempotencyKey(idempotencyKey) }
             .build()
 }

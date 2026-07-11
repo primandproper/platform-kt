@@ -4,7 +4,6 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
-import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.minutes
 
 class NoopTokenIssuerTest {
@@ -27,12 +26,7 @@ class NoopTokenIssuerTest {
             assertEquals("", claims.jti())
             assertNull(claims.expiresAt())
 
-            val (rawValue, rawPresent) = claims.get("anything")
-            assertTrue(!rawPresent)
-            assertNull(rawValue)
-
-            val (strValue, strPresent) = claims.getString("anything")
-            assertTrue(!strPresent)
-            assertEquals("", strValue)
+            assertNull(claims["anything"])
+            assertNull(claims.getStringOrNull("anything"))
         }
 }

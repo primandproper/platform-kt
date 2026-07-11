@@ -59,6 +59,6 @@ public interface AdvisoryLockConnection {
 /**
  * Thrown by [AdvisoryLockClient.reserve] when the write pool is saturated by held locks and the wait
  * budget elapsed. The locker translates it into
- * [com.primandproper.platform.distributedlock.ErrLockNotAcquired] — contention, not an error.
+ * [com.primandproper.platform.distributedlock.LockNotAcquiredException] — contention, not an error.
  */
 public class PoolSaturatedException : RuntimeException("write connection pool saturated by held locks")

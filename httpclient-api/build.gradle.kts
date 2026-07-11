@@ -17,6 +17,9 @@ dependencies {
 
     testImplementation(libs.kotlin.test)
     testImplementation(libs.kotlinx.coroutines.test)
+    // Real SDK spans so the retry instrumentation (events + http.retry_count) can be asserted end-to-end.
+    testImplementation(libs.opentelemetry.sdk)
+    testImplementation(libs.opentelemetry.sdk.testing)
 }
 
 kotlin {

@@ -1,7 +1,7 @@
 package com.primandproper.platform.distributedlock
 
 import com.primandproper.platform.errors.PlatformException
-import com.primandproper.platform.errors.newError
+import com.primandproper.platform.observability.SuspendCloseable
 import kotlin.time.Duration
 
 /*
@@ -19,37 +19,33 @@ import kotlin.time.Duration
  * Provider semantics differ in one respect: the redis and memory providers enforce TTLs natively,
  * while the postgres provider's TTL is advisory only — the underlying `pg_advisory_lock` is held
  * until Release is called or the dedicated session is closed. See `:distributedlock-postgres`.
+ *
+ * Distributed-lock error types: in platform-go these are `var Err… = errors.New(…)` sentinels matched
+ * via errors.Is; here they are exception CLASSES thrown fresh at each site and matched by type. The
+ * nil-config / nil-database-client sentinels are dropped — Kotlin's non-null types already forbid what
+ * they modelled (the provider constructors take non-null configs/clients).
  */
 
 /**
- * Signals that [Locker.acquire] could not obtain the lock immediately because another caller
- * currently holds it. There is no internal retry — callers wrap Acquire with retry/backoff
- * themselves. Mirrors platform-go's `ErrLockNotAcquired`.
+ * Thrown when [Locker.acquire] could not obtain the lock immediately because another caller currently
+ * holds it. There is no internal retry — callers wrap Acquire with retry/backoff themselves. Mirrors
+ * platform-go's `ErrLockNotAcquired`.
  */
-public val ErrLockNotAcquired: PlatformException = newError("lock not acquired")
+public class LockNotAcquiredException : PlatformException("lock not acquired")
 
 /**
- * Signals that [Lock.release] or [Lock.refresh] was called on a lock the caller no longer owns —
+ * Thrown when [Lock.release] or [Lock.refresh] was called on a lock the caller no longer owns —
  * TTL expiration, the lock being stolen by another caller after expiration, double-release, or (for
  * the postgres provider) the underlying connection being closed out from under us. Mirrors
  * platform-go's `ErrLockNotHeld`.
  */
-public val ErrLockNotHeld: PlatformException = newError("lock not held")
+public class LockNotHeldException : PlatformException("lock not held")
 
-/** Signals a nil provider config was passed to a constructor. Mirrors platform-go's `ErrNilConfig`. */
-public val ErrNilConfig: PlatformException = newError("nil distributedlock config")
+/** Thrown when a non-positive TTL was supplied to Acquire or Refresh. Mirrors platform-go's `ErrInvalidTTL`. */
+public class InvalidTtlException : PlatformException("invalid lock TTL")
 
-/** Signals a non-positive TTL was supplied to Acquire or Refresh. Mirrors platform-go's `ErrInvalidTTL`. */
-public val ErrInvalidTTL: PlatformException = newError("invalid lock TTL")
-
-/** Signals an empty key was supplied to Acquire. Mirrors platform-go's `ErrEmptyKey`. */
-public val ErrEmptyKey: PlatformException = newError("empty lock key")
-
-/**
- * Signals a nil database client was passed to a postgres-backed provider. Mirrors platform-go's
- * `ErrNilDatabaseClient`.
- */
-public val ErrNilDatabaseClient: PlatformException = newError("nil database client")
+/** Thrown when an empty key was supplied to Acquire. Mirrors platform-go's `ErrEmptyKey`. */
+public class EmptyKeyException : PlatformException("empty lock key")
 
 /**
  * The manager atom. It hands out [Lock] handles keyed by string. Locker implementations must be safe
@@ -58,12 +54,25 @@ public val ErrNilDatabaseClient: PlatformException = newError("nil database clie
  *
  * Every method suspends: Go threads a `context.Context` through each call, and the coroutine analog
  * is a `suspend` function whose caller's [kotlinx.coroutines.CoroutineScope] carries cancellation.
+ *
+ * TTL-enforcement guarantees differ by backend and are NOT uniform behind this interface:
+ * - the redis and memory backends enforce the TTL natively/server-side, so a crashed holder's lock is
+ *   automatically released once the TTL elapses;
+ * - the postgres backend's TTL is **advisory only**. `pg_advisory_lock` has no server-side expiry, so
+ *   the lock (and the pooled connection pinning it) is held until [Lock.release] or [close] runs, or
+ *   the session is torn down — a handle abandoned by a crashed owner is NOT reaped after its TTL.
+ *
+ * Callers that depend on TTL-based auto-release of a dead holder's lock must choose a backend that
+ * enforces it. See `PostgresLocker` in `:distributedlock-postgres` for the full divergence note.
  */
-public interface Locker {
+public interface Locker : SuspendCloseable {
     /**
-     * Attempts to acquire the lock named [key] with the supplied [ttl]. Throws [ErrLockNotAcquired]
+     * Attempts to acquire the lock named [key] with the supplied [ttl]. Throws [LockNotAcquiredException]
      * immediately if the lock is currently held by another caller (there is no internal retry),
-     * [ErrEmptyKey] for an empty [key], or [ErrInvalidTTL] for a non-positive [ttl].
+     * [EmptyKeyException] for an empty [key], or [InvalidTtlException] for a non-positive [ttl].
+     *
+     * The [ttl]'s enforcement is backend-dependent — server-side for redis/memory, advisory-only for
+     * postgres (see the type-level note above).
      */
     public suspend fun acquire(
         key: String,
@@ -75,9 +84,10 @@ public interface Locker {
 
     /**
      * Releases any backend resources held by the Locker. Outstanding [Lock] handles obtained from
-     * this Locker may become invalid after [close].
+     * this Locker may become invalid after [close]. Shares the platform-wide [SuspendCloseable] closer
+     * type (P3-12), so a Locker can be bracketed with `use { }`.
      */
-    public suspend fun close()
+    override suspend fun close()
 }
 
 /**
@@ -96,11 +106,11 @@ public interface Lock {
     public val ttl: Duration
 
     /**
-     * Releases the lock. Throws [ErrLockNotHeld] if the caller no longer owns the lock (expiration,
+     * Releases the lock. Throws [LockNotHeldException] if the caller no longer owns the lock (expiration,
      * theft after expiration, double-release).
      */
     public suspend fun release()
 
-    /** Extends the lock's TTL to [ttl]. Throws [ErrLockNotHeld] if the caller no longer owns the lock. */
+    /** Extends the lock's TTL to [ttl]. Throws [LockNotHeldException] if the caller no longer owns the lock. */
     public suspend fun refresh(ttl: Duration)
 }

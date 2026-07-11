@@ -1,17 +1,19 @@
 package com.primandproper.platform.notifications.fcm
 
 import com.primandproper.platform.circuitbreaking.CircuitBreaker
-import com.primandproper.platform.circuitbreaking.ensureCircuitBreaker
+import com.primandproper.platform.circuitbreaking.NoopCircuitBreaker
 import com.primandproper.platform.httpclient.HttpClient
 import com.primandproper.platform.httpclient.HttpMethod
 import com.primandproper.platform.httpclient.HttpRequest
 import com.primandproper.platform.httpclient.HttpResponse
 import com.primandproper.platform.notifications.NotificationKeys
-import com.primandproper.platform.notifications.PLATFORM_ANDROID
+import com.primandproper.platform.notifications.Platform
 import com.primandproper.platform.notifications.PlatformNotSupportedException
 import com.primandproper.platform.notifications.PushMessage
 import com.primandproper.platform.notifications.PushNotificationSender
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.Observer
 import com.primandproper.platform.observability.Operation
 import com.primandproper.platform.observability.TracerProvider
@@ -131,12 +133,12 @@ public class FcmPushSender internal constructor(
     private val sendUrl: String = baseUrl.trimEnd('/') + "/v1/projects/" + projectId + "/messages:send"
 
     override suspend fun sendPush(
-        platform: String,
+        platform: Platform,
         token: String,
         message: PushMessage,
     ): Unit =
         o11y.span("SendPush") {
-            set(NotificationKeys.PLATFORM, platform.trim().lowercase())
+            set(NotificationKeys.PLATFORM, platform.wireName)
             set(NotificationKeys.TITLE, message.title)
             requireAndroid(platform)
             dropBadgeIfPresent(message)
@@ -152,12 +154,12 @@ public class FcmPushSender internal constructor(
         }
 
     override suspend fun sendToTopic(
-        platform: String,
+        platform: Platform,
         topic: String,
         message: PushMessage,
     ): Unit =
         o11y.span("SendToTopic") {
-            set(NotificationKeys.PLATFORM, platform.trim().lowercase())
+            set(NotificationKeys.PLATFORM, platform.wireName)
             set(NotificationKeys.TOPIC, topic)
             set(NotificationKeys.TITLE, message.title)
             requireAndroid(platform)
@@ -194,8 +196,8 @@ public class FcmPushSender internal constructor(
         }
 
     private companion object {
-        fun requireAndroid(platform: String) {
-            if (platform.trim().lowercase() != PLATFORM_ANDROID) throw PlatformNotSupportedException(platform)
+        fun requireAndroid(platform: Platform) {
+            if (platform != Platform.ANDROID) throw PlatformNotSupportedException(platform)
         }
 
         fun parseError(response: HttpResponse): FcmApiException {
@@ -228,15 +230,15 @@ public fun FcmPushSender(
     httpClient: HttpClient,
     tokenProvider: suspend () -> String,
     baseUrl: String = FcmConfig.DEFAULT_BASE_URL,
-    logger: Logger? = null,
-    tracerProvider: TracerProvider? = null,
-    circuitBreaker: CircuitBreaker? = null,
+    logger: Logger = NoopLogger,
+    tracerProvider: TracerProvider = NoopTracerProvider,
+    circuitBreaker: CircuitBreaker = NoopCircuitBreaker,
 ): FcmPushSender {
     if (projectId.isEmpty()) throw EmptyFcmProjectIdException()
     return FcmPushSender(
         o11y = Observer(NAME, logger, tracerProvider),
         httpClient = httpClient,
-        circuitBreaker = ensureCircuitBreaker(circuitBreaker),
+        circuitBreaker = circuitBreaker,
         projectId = projectId,
         tokenProvider = tokenProvider,
         baseUrl = baseUrl,
@@ -247,9 +249,9 @@ public fun FcmPushSender(
 public fun FcmPushSender(
     config: FcmConfig,
     httpClient: HttpClient,
-    logger: Logger? = null,
-    tracerProvider: TracerProvider? = null,
-    circuitBreaker: CircuitBreaker? = null,
+    logger: Logger = NoopLogger,
+    tracerProvider: TracerProvider = NoopTracerProvider,
+    circuitBreaker: CircuitBreaker = NoopCircuitBreaker,
 ): FcmPushSender {
     config.validate()
     return FcmPushSender(

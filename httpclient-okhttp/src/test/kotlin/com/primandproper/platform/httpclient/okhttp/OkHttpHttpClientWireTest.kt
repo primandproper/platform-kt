@@ -34,7 +34,7 @@ class OkHttpHttpClientWireTest {
     fun `executes a GET and reads the body`() =
         runTest {
             server.enqueue(MockResponse().setBody("hello").setResponseCode(200))
-            val client = OkHttpHttpClient.create(HttpClientConfig { timeout = 5.seconds })
+            val client = OkHttpHttpClient.create(HttpClientConfig(timeout = 5.seconds))
 
             val response = client.execute(HttpRequest.get(server.url("/greet").toString()))
 
@@ -47,7 +47,7 @@ class OkHttpHttpClientWireTest {
     fun `sends request headers`() =
         runTest {
             server.enqueue(MockResponse().setResponseCode(204))
-            val client = OkHttpHttpClient.create(HttpClientConfig { timeout = 5.seconds })
+            val client = OkHttpHttpClient.create(HttpClientConfig(timeout = 5.seconds))
 
             client.execute(
                 HttpRequest.build {

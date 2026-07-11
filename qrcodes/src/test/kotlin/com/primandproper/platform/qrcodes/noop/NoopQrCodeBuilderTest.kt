@@ -9,13 +9,13 @@ import kotlin.test.assertNotNull
 class NoopQrCodeBuilderTest {
     @Test
     fun `construction yields a non-null builder`() {
-        assertNotNull(NoopQrCodeBuilder())
+        assertNotNull(NoopQrCodeBuilder)
     }
 
     @Test
     fun `buildQrCode returns an empty string`() =
         runTest {
-            val result = NoopQrCodeBuilder().buildQrCode("user@example.com", "JBSWY3DPEHPK3PXP")
+            val result = NoopQrCodeBuilder.buildQrCode("user@example.com", "JBSWY3DPEHPK3PXP")
             assertEquals("", result)
         }
 }

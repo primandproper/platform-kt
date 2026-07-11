@@ -1,25 +1,31 @@
 package com.primandproper.platform.distributedlock.postgres
 
 import com.primandproper.platform.circuitbreaking.CircuitBreaker
-import com.primandproper.platform.circuitbreaking.ErrCircuitBroken
-import com.primandproper.platform.circuitbreaking.ensureCircuitBreaker
-import com.primandproper.platform.distributedlock.ErrEmptyKey
-import com.primandproper.platform.distributedlock.ErrInvalidTTL
-import com.primandproper.platform.distributedlock.ErrLockNotAcquired
-import com.primandproper.platform.distributedlock.ErrLockNotHeld
+import com.primandproper.platform.circuitbreaking.CircuitBrokenException
+import com.primandproper.platform.circuitbreaking.NoopCircuitBreaker
+import com.primandproper.platform.distributedlock.EmptyKeyException
+import com.primandproper.platform.distributedlock.InvalidTtlException
 import com.primandproper.platform.distributedlock.Lock
+import com.primandproper.platform.distributedlock.LockNotAcquiredException
+import com.primandproper.platform.distributedlock.LockNotHeldException
 import com.primandproper.platform.distributedlock.Locker
 import com.primandproper.platform.errors.isError
 import com.primandproper.platform.errors.newError
 import com.primandproper.platform.identifiers.newUlid
 import com.primandproper.platform.observability.Keys
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.Observer
 import com.primandproper.platform.observability.Operation
 import com.primandproper.platform.observability.TracerProvider
+import com.primandproper.platform.observability.span
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.time.Duration
+import kotlin.time.TimeMark
+import kotlin.time.TimeSource
 
 /**
  * A Postgres-backed [Locker] over session-scoped advisory locks. Port of platform-go's
@@ -33,14 +39,24 @@ import kotlin.time.Duration
  * leak back into the pool.
  *
  * TTL is advisory only: Postgres advisory locks have no server-side expiry, so the handle tracks it
- * client-side (via the injectable [now] clock) purely to honor the Lock contract — once expired, the
- * handle is treated as no longer held and its pinned connection is freed. [Lock.refresh] is a
+ * client-side (via the injectable [timeSource]) purely to honor the Lock contract — once expired, the
+ * handle is treated as no longer held and its pinned connection is freed. This is a purely local,
+ * within-process deadline (never persisted or compared across processes), so an elapsed-only monotonic
+ * [TimeSource] is the correct base — the same modeling `:circuitbreaking` uses. [Lock.refresh] is a
  * `SELECT 1` liveness probe that lets the caller bump their local TTL bookkeeping; it does not extend
  * anything on the server.
  *
+ * IMPORTANT — divergent guarantee: this is materially weaker than the Redis backend, which enforces
+ * TTL server-side. Here the client-side TTL is only consulted when the *owner* calls back into the
+ * locker (release/refresh). A handle that is never released — because its owner crashed, was killed,
+ * or simply leaked it — pins its `pg_advisory_lock` AND its pooled connection until [close] is called
+ * or the physical session is torn down; there is no background reaper. Callers who rely on a crashed
+ * holder's lock being auto-released after the TTL must not use this backend for that guarantee. See
+ * the note on [Locker] in `:distributedlock-api`.
+ *
  * The [CircuitBreaker] wraps each backend interaction; platform-go's
  * `CannotProceed()`/`Succeeded()`/`Failed()` trio is folded into [CircuitBreaker.execute] — an open
- * breaker short-circuits with [ErrCircuitBroken], a real backend error counts a failure, and the
+ * breaker short-circuits with [CircuitBrokenException], a real backend error counts a failure, and the
  * healthy control-flow outcomes (contention, pool saturation, lost ownership) return normally and
  * count a success, so they never trip the breaker.
  *
@@ -53,7 +69,7 @@ public class PostgresLocker internal constructor(
     private val circuitBreaker: CircuitBreaker,
     private val namespace: Int,
     private val connWaitTimeout: Duration,
-    private val now: () -> Long,
+    private val timeSource: TimeSource = TimeSource.Monotonic,
 ) : Locker {
     /**
      * @param config namespace + connection-wait settings.
@@ -65,16 +81,16 @@ public class PostgresLocker internal constructor(
     public constructor(
         config: PostgresLockConfig,
         client: AdvisoryLockClient,
-        logger: Logger? = null,
-        tracerProvider: TracerProvider? = null,
-        circuitBreaker: CircuitBreaker? = null,
+        logger: Logger = NoopLogger,
+        tracerProvider: TracerProvider = NoopTracerProvider,
+        circuitBreaker: CircuitBreaker = NoopCircuitBreaker,
     ) : this(
         Observer(NAME, logger, tracerProvider),
         client,
-        ensureCircuitBreaker(circuitBreaker),
+        circuitBreaker,
         config.namespace,
         config.effectiveConnWaitTimeout(),
-        System::currentTimeMillis,
+        TimeSource.Monotonic,
     )
 
     private val mutex = Mutex()
@@ -88,8 +104,8 @@ public class PostgresLocker internal constructor(
         try {
             op.set(Keys.NAME, key).set("lock.ttl", ttl)
 
-            if (key.isEmpty()) throw ErrEmptyKey
-            if (!ttl.isPositive()) throw ErrInvalidTTL
+            if (key.isEmpty()) throw EmptyKeyException()
+            if (!ttl.isPositive()) throw InvalidTtlException()
 
             val lockId = hashLockID(namespace, key)
             op.set("lock.id", lockId)
@@ -119,16 +135,20 @@ public class PostgresLocker internal constructor(
                         }
                     }
                 } catch (t: Throwable) {
-                    if (isError(t, ErrCircuitBroken)) throw t
+                    if (isError<CircuitBrokenException>(t)) throw t
                     throw op.error(t, "reserving postgres advisory lock")
                 }
 
             return when (outcome) {
-                AcquireOutcome.Contended -> throw ErrLockNotAcquired
+                AcquireOutcome.Contended -> {
+                    op.set("lock.outcome", "contended")
+                    throw LockNotAcquiredException()
+                }
                 is AcquireOutcome.Acquired -> {
+                    op.set("lock.outcome", "acquired")
                     val token = newUlid()
                     val handle =
-                        PostgresLock(this, outcome.conn, key, token, lockId, ttl, now() + ttl.inWholeMilliseconds, now)
+                        PostgresLock(this, outcome.conn, key, token, lockId, ttl, timeSource.markNow() + ttl, timeSource)
                     mutex.withLock { outstanding[token] = handle }
                     handle
                 }
@@ -139,12 +159,12 @@ public class PostgresLocker internal constructor(
     }
 
     override suspend fun ping() {
-        client.ping()
+        o11y.span("Ping") { client.ping() }
     }
 
     /**
      * Releases all outstanding locks held by this Locker, then closes the client. After [close],
-     * individual handles see [ErrLockNotHeld] on release/refresh. Surfaces the first release failure.
+     * individual handles see [LockNotHeldException] on release/refresh. Surfaces the first release failure.
      */
     override suspend fun close() {
         val handles =
@@ -158,6 +178,9 @@ public class PostgresLocker internal constructor(
             try {
                 releaseLocked(null, handle)
             } catch (t: Throwable) {
+                // Surface the first failure to the caller, but never swallow the rest: log every one so
+                // a lock that failed to release (and its pinned connection) is at least observable.
+                o11y.logger.error("releasing outstanding postgres advisory lock during close", t)
                 if (firstError == null) firstError = t
             }
         }
@@ -185,10 +208,10 @@ public class PostgresLocker internal constructor(
                         }
                     }
                 } catch (t: Throwable) {
-                    if (isError(t, ErrCircuitBroken)) throw t
+                    if (isError<CircuitBrokenException>(t)) throw t
                     throw op.error(t, "releasing postgres advisory lock")
                 }
-            if (outcome == ReleaseOutcome.NotHeld) throw ErrLockNotHeld
+            if (outcome == ReleaseOutcome.NotHeld) throw LockNotHeldException()
         } finally {
             op.end()
         }
@@ -203,7 +226,7 @@ public class PostgresLocker internal constructor(
         val op = o11y.begin("Refresh")
         try {
             op.set(Keys.NAME, handle.key).set("lock.id", handle.lockId).set("lock.ttl", ttl)
-            if (!ttl.isPositive()) throw ErrInvalidTTL
+            if (!ttl.isPositive()) throw InvalidTtlException()
 
             val outcome =
                 try {
@@ -219,20 +242,30 @@ public class PostgresLocker internal constructor(
                             RefreshOutcome.NotHeld
                         } else {
                             // SELECT 1 verifies the conn is alive without altering server state; a dead
-                            // session is a real failure that should count against the breaker.
-                            val alive = runCatching { handle.conn.isAlive() }.getOrDefault(false)
+                            // session is a real failure that should count against the breaker. Record the
+                            // probe failure rather than silently swallowing it, but still rethrow real
+                            // cancellation.
+                            val alive =
+                                try {
+                                    handle.conn.isAlive()
+                                } catch (c: CancellationException) {
+                                    throw c
+                                } catch (t: Throwable) {
+                                    op.acknowledge(t, "probing postgres advisory lock liveness")
+                                    false
+                                }
                             if (!alive) throw LIVENESS_LOST
                             RefreshOutcome.Refreshed
                         }
                     }
                 } catch (t: Throwable) {
                     when {
-                        t === LIVENESS_LOST -> throw ErrLockNotHeld
-                        isError(t, ErrCircuitBroken) -> throw t
+                        t === LIVENESS_LOST -> throw LockNotHeldException()
+                        isError<CircuitBrokenException>(t) -> throw t
                         else -> throw op.error(t, "refreshing postgres advisory lock")
                     }
                 }
-            if (outcome == RefreshOutcome.NotHeld) throw ErrLockNotHeld
+            if (outcome == RefreshOutcome.NotHeld) throw LockNotHeldException()
         } finally {
             op.end()
         }
@@ -291,17 +324,17 @@ public class PostgresLocker internal constructor(
         val token: String,
         val lockId: Long,
         ttl: Duration,
-        expiresAt: Long,
-        private val now: () -> Long,
+        expiresAt: TimeMark,
+        private val timeSource: TimeSource,
     ) : Lock {
         private var currentTtl: Duration = ttl
-        private var expiresAt: Long = expiresAt
+        private var expiresAt: TimeMark = expiresAt
 
         override val ttl: Duration get() = currentTtl
 
         // Whether the client-side TTL has elapsed. Postgres has no server-side expiry, so this tracks
         // it locally to honor the Lock contract, mirroring the redis/memory backends.
-        fun expired(): Boolean = now() > expiresAt
+        fun expired(): Boolean = expiresAt.hasPassedNow()
 
         override suspend fun release() {
             locker.release(this)
@@ -310,7 +343,7 @@ public class PostgresLocker internal constructor(
         override suspend fun refresh(ttl: Duration) {
             locker.refresh(this, ttl)
             currentTtl = ttl
-            expiresAt = now() + ttl.inWholeMilliseconds
+            expiresAt = timeSource.markNow() + ttl
         }
     }
 
@@ -318,7 +351,7 @@ public class PostgresLocker internal constructor(
         const val NAME = "postgres_distributed_lock"
 
         // Internal marker so a dead-session liveness probe counts as a breaker failure (matching Go's
-        // errCounter+Failed) yet is translated to ErrLockNotHeld outside execute without recording a
+        // errCounter+Failed) yet is translated to LockNotHeldException outside execute without recording a
         // spurious operation error via op.error.
         val LIVENESS_LOST: Throwable = newError("postgres session liveness lost")
     }

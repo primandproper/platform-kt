@@ -1,9 +1,14 @@
 package com.primandproper.platform.healthcheck
 
+import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 
@@ -87,4 +92,73 @@ class HealthCheckTest {
             assertEquals(ComponentResult(Status.UP), result.components["fast"])
             assertEquals(Status.DOWN, result.components["slow"]?.status)
         }
+
+    @Test
+    fun `an ancestor timeout propagates instead of being reported down`() =
+        runTest {
+            // The outer deadline (1s) is shorter than the per-check deadline (5s), so it is the
+            // *ancestor* that cancels the probe. That cancellation must surface out of checkAll, not be
+            // swallowed and mislabeled as a component that is down.
+            val reg = Registry()
+            reg.register(MockChecker(name = "slow", checkFn = { delay(100.seconds) }))
+
+            assertFailsWith<TimeoutCancellationException> {
+                withTimeout(1.seconds) { reg.checkAll() }
+            }
+        }
+
+    @Test
+    fun `logs a failure and then a recovery as a component flaps`() =
+        runTest {
+            val logger = CapturingLogger()
+            val reg = Registry(logger)
+            var healthy = false
+            reg.register(MockChecker(name = "db", checkFn = { if (!healthy) throw RuntimeException("connection refused") }))
+
+            reg.checkAll() // first probe: down -> a failure is logged
+            assertEquals(1, logger.warnings.size, "a newly-failing component must be logged")
+            assertEquals("db", logger.values["component"])
+
+            healthy = true
+            reg.checkAll() // second probe: back up -> a recovery is logged
+            assertTrue(logger.infos.any { it.contains("recovered") }, "a recovered component must be logged")
+        }
+
+    @Test
+    fun `does not re-log a component that stays down`() =
+        runTest {
+            val logger = CapturingLogger()
+            val reg = Registry(logger)
+            reg.register(MockChecker(name = "db", checkFn = { throw RuntimeException("still down") }))
+
+            reg.checkAll()
+            reg.checkAll()
+
+            assertEquals(1, logger.warnings.size, "only the transition to down is logged, not every probe")
+        }
+
+    /** A [Logger] that captures warn/info messages and the fluent values, for asserting flap logging. */
+    private class CapturingLogger : Logger by NoopLogger {
+        val warnings = mutableListOf<String>()
+        val infos = mutableListOf<String>()
+        val values = mutableMapOf<String, Any?>()
+
+        override fun warn(msg: String) {
+            warnings += msg
+        }
+
+        override fun info(msg: String) {
+            infos += msg
+        }
+
+        override fun withValue(
+            key: String,
+            value: Any?,
+        ): Logger =
+            apply {
+                values[key] = value
+            }
+
+        override fun withError(err: Throwable): Logger = this
+    }
 }

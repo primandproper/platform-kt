@@ -50,11 +50,11 @@ public fun skipIfNotRunning(): Unit =
  * from this and tweak individual fields before building their own policy.
  */
 public fun defaultRetryConfig(): RetryConfig =
-    RetryConfig().apply {
-        maxAttempts = DEFAULT_MAX_ATTEMPTS
-        initialDelay = DEFAULT_INITIAL_DELAY
-        useJitter = false
-    }
+    RetryConfig(
+        maxAttempts = DEFAULT_MAX_ATTEMPTS,
+        initialDelay = DEFAULT_INITIAL_DELAY,
+        useJitter = false,
+    )
 
 /**
  * Invokes [start] under [ExponentialBackoffPolicy] built from [defaultRetryConfig], so every

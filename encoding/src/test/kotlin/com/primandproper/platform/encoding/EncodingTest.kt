@@ -24,30 +24,20 @@ class EncodingTest {
     }
 
     @Test
-    fun `mustEncode with a null content type produces bytes`() {
-        val result = mustEncode(Example("must"), null, Example.serializer())
+    fun `encode with a null content type produces bytes`() {
+        val result = encode(Example("must"), null, Example.serializer())
         assertTrue(result.isNotEmpty())
         assertEquals("""{"name":"must"}""", result.decodeToString())
     }
 
     @Test
-    fun `mustEncode throws on a broken payload`() {
-        assertFailsWith<Exception> { mustEncode(Example("boom"), null, BrokenSerializer) }
+    fun `encode throws on a broken payload`() {
+        assertFailsWith<Exception> { encode(Example("boom"), null, BrokenSerializer) }
     }
 
     @Test
-    fun `mustDecode round-trips`() {
-        assertEquals(Example("test"), mustDecode("""{"name":"test"}""".encodeToByteArray(), null, Example.serializer()))
-    }
-
-    @Test
-    fun `mustDecode throws on invalid data`() {
-        assertFailsWith<Exception> { mustDecode("""{invalid""".encodeToByteArray(), null, Example.serializer()) }
-    }
-
-    @Test
-    fun `mustEncodeJson produces JSON bytes`() {
-        assertEquals("""{"name":"j"}""", mustEncodeJson(Example("j"), Example.serializer()).decodeToString())
+    fun `encodeJson produces JSON bytes`() {
+        assertEquals("""{"name":"j"}""", encodeJson(Example("j"), Example.serializer()).decodeToString())
     }
 
     @Test
@@ -61,20 +51,15 @@ class EncodingTest {
     }
 
     @Test
-    fun `mustDecodeJson round-trips`() {
-        assertEquals(Example("test"), mustDecodeJson("""{"name":"test"}""".encodeToByteArray(), Example.serializer()))
-    }
-
-    @Test
-    fun `mustJsonIntoReader yields a readable stream`() {
-        val reader = mustJsonIntoReader(Example("reader"), Example.serializer())
+    fun `jsonIntoReader yields a readable stream`() {
+        val reader = jsonIntoReader(Example("reader"), Example.serializer())
         assertEquals("""{"name":"reader"}""", reader.readBytes().decodeToString())
     }
 
     @Test
     fun `reified helpers derive the serializer`() {
-        val bytes = mustEncode(Example("reified"))
+        val bytes = encode(Example("reified"))
         assertEquals(Example("reified"), decode<Example>(bytes))
-        assertEquals(Example("reified"), mustDecodeJson<Example>(mustEncodeJson(Example("reified"))))
+        assertEquals(Example("reified"), decodeJson<Example>(encodeJson(Example("reified"))))
     }
 }

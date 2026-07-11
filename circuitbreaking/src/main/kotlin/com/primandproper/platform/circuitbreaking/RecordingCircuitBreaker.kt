@@ -11,7 +11,7 @@ import kotlinx.coroutines.flow.asStateFlow
  * closure per method and inspect the recorded call lists, this records call counts and lets a test
  * force the outcome via [reject].
  *
- * With `reject = true` every [execute] throws [ErrCircuitBroken] without running the block (a breaker
+ * With `reject = true` every [execute] throws [CircuitBrokenException] without running the block (a breaker
  * pinned open), which is how the partitioned tests assert per-key isolation. With the default
  * `reject = false` it passes calls through, counting successes and failures so a test can assert how
  * a collaborator exercised the breaker.
@@ -36,7 +36,7 @@ public class RecordingCircuitBreaker(
     public var failureCount: Int = 0
         private set
 
-    /** Calls rejected with [ErrCircuitBroken] because [reject] is set. */
+    /** Calls rejected with [CircuitBrokenException] because [reject] is set. */
     public var rejectionCount: Int = 0
         private set
 
@@ -44,7 +44,7 @@ public class RecordingCircuitBreaker(
         executeCount++
         if (reject) {
             rejectionCount++
-            throw ErrCircuitBroken
+            throw CircuitBrokenException()
         }
         return try {
             val result = block()

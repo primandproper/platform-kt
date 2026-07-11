@@ -14,9 +14,9 @@ class PushNotificationSenderDoublesTest {
     @Test
     fun `noop discards every call`() =
         runTest {
-            val noop = NoopPushNotificationSender()
-            noop.sendPush(PLATFORM_ANDROID, "token", message)
-            noop.sendToTopic(PLATFORM_ANDROID, "topic", message)
+            val noop = NoopPushNotificationSender
+            noop.sendPush(Platform.ANDROID, "token", message)
+            noop.sendToTopic(Platform.ANDROID, "topic", message)
         }
 
     @Test
@@ -25,10 +25,10 @@ class PushNotificationSenderDoublesTest {
             var seen: PushMessage? = null
             val mock = PushNotificationSenderMock(sendPushFunc = { _, _, m -> seen = m })
 
-            mock.sendPush(PLATFORM_ANDROID, "device-token", message)
+            mock.sendPush(Platform.ANDROID, "device-token", message)
 
             assertEquals(1, mock.sendPushCalls.size)
-            assertEquals(PLATFORM_ANDROID, mock.sendPushCalls.single().platform)
+            assertEquals(Platform.ANDROID, mock.sendPushCalls.single().platform)
             assertEquals("device-token", mock.sendPushCalls.single().token)
             assertEquals(message, seen)
         }
@@ -38,7 +38,7 @@ class PushNotificationSenderDoublesTest {
         runTest {
             val mock = PushNotificationSenderMock(sendToTopicFunc = { _, _, _ -> })
 
-            mock.sendToTopic(PLATFORM_ANDROID, "news", message)
+            mock.sendToTopic(Platform.ANDROID, "news", message)
 
             assertEquals("news", mock.sendToTopicCalls.single().topic)
         }
@@ -47,6 +47,6 @@ class PushNotificationSenderDoublesTest {
     fun `an unmocked call surfaces immediately`() =
         runTest {
             val mock = PushNotificationSenderMock()
-            assertFailsWith<IllegalStateException> { mock.sendPush(PLATFORM_ANDROID, "t", message) }
+            assertFailsWith<IllegalStateException> { mock.sendPush(Platform.ANDROID, "t", message) }
         }
 }

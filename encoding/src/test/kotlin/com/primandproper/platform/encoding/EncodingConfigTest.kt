@@ -18,13 +18,13 @@ class EncodingConfigTest {
     }
 
     @Test
-    fun `provideContentType resolves the configured type`() {
-        assertEquals(ContentType.JSON, provideContentType(EncodingConfig("application/json")))
-        assertEquals(ContentType.XML, provideContentType(EncodingConfig("application/xml")))
+    fun `contentType resolves the configured type`() {
+        assertEquals(ContentType.JSON, contentType(EncodingConfig("application/json")))
+        assertEquals(ContentType.XML, contentType(EncodingConfig("application/xml")))
     }
 
     @Test
-    fun `provideContentType defaults an unknown type to JSON`() {
-        assertEquals(ContentType.JSON, provideContentType(EncodingConfig("nonsense")))
+    fun `contentType defaults an unknown type to JSON`() {
+        assertEquals(ContentType.JSON, contentType(EncodingConfig("nonsense")))
     }
 }

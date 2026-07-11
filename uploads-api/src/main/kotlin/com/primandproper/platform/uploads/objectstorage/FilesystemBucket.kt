@@ -10,9 +10,11 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import java.io.InputStream
+import java.nio.ByteBuffer
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.PosixFilePermission
 import java.nio.file.attribute.PosixFilePermissions
 import java.time.Instant
@@ -58,11 +60,23 @@ public class FilesystemBucket(
         withContext(Dispatchers.IO) {
             val target = resolve(path)
             if (!Files.exists(target)) throw objectNotFound(path)
-            val bytes = Files.readAllBytes(target)
-            val start = offset.coerceIn(0, bytes.size.toLong()).toInt()
-            val end = if (length < 0) bytes.size else (start + length).coerceAtMost(bytes.size.toLong()).toInt()
-            val slice = bytes.copyOfRange(start, end)
-            RangeReaderResult(slice.inputStream(), slice.size.toLong())
+            val fileSize = Files.size(target)
+            val start = offset.coerceIn(0, fileSize)
+            val end = if (length < 0) fileSize else (start + length).coerceAtMost(fileSize)
+            val count = (end - start).toInt()
+            // Seek to the range offset and read only the requested bytes — a whole-file readAllBytes()
+            // would defeat the RangeReader contract and risk OOM on large objects.
+            val buffer = ByteArray(count)
+            Files.newByteChannel(target, StandardOpenOption.READ).use { channel ->
+                channel.position(start)
+                val view = ByteBuffer.wrap(buffer)
+                while (view.hasRemaining() && channel.read(view) >= 0) {
+                    // keep filling until the requested length is satisfied or EOF is hit
+                }
+                val read = view.position()
+                val bytes = if (read == count) buffer else buffer.copyOf(read)
+                RangeReaderResult(bytes.inputStream(), read.toLong())
+            }
         }
 
     override suspend fun delete(path: String) {
@@ -142,7 +156,12 @@ public class FilesystemBucket(
         target: Path,
         options: SaveOptions,
     ) {
-        if (options.contentType == null && options.cacheControl == null) return
+        if (options.contentType == null && options.cacheControl == null) {
+            // Attribute-less overwrite: drop any sidecar left by a previous write so attributes() reads
+            // the new object's own type/cache-control (i.e. none) instead of serving stale values.
+            Files.deleteIfExists(sidecarOf(target))
+            return
+        }
         val props = Properties()
         options.contentType?.let { props.setProperty(CONTENT_TYPE_KEY, it) }
         options.cacheControl?.let { props.setProperty(CACHE_CONTROL_KEY, it) }

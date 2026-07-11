@@ -4,13 +4,16 @@ import com.primandproper.platform.cache.BatchCache
 import com.primandproper.platform.cache.CacheCodec
 import com.primandproper.platform.cache.redis.slots.slotForKey
 import com.primandproper.platform.circuitbreaking.CircuitBreaker
-import com.primandproper.platform.circuitbreaking.ErrCircuitBroken
-import com.primandproper.platform.circuitbreaking.ensureCircuitBreaker
+import com.primandproper.platform.circuitbreaking.CircuitBrokenException
+import com.primandproper.platform.circuitbreaking.NoopCircuitBreaker
 import com.primandproper.platform.errors.PlatformException
 import com.primandproper.platform.errors.isError
 import com.primandproper.platform.observability.Keys
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.Observer
+import com.primandproper.platform.observability.Operation
 import com.primandproper.platform.observability.TracerProvider
 import com.primandproper.platform.observability.span
 import kotlin.time.Duration
@@ -33,7 +36,8 @@ import kotlin.time.Duration
  * `SetMany` are no-ops (never `ErrCircuitBroken`), so a struggling Redis sheds load instead of
  * cascading failures into callers. The coroutine-native breaker here is `execute`-shaped (it throws
  * `ErrCircuitBroken` when open), so each transport call goes through [degrade]/[degradeUnit], which
- * catch that sentinel and return the same miss/no-op Go does. A transport error inside the call still
+ * catch that sentinel and return the same miss/no-op Go does — and, so shed load is not invisible, flag
+ * the span with `cache.degraded` and warn. A transport error inside the call still
  * propagates and counts as a breaker failure; a healthy miss (Go's `redis.Nil`, surfaced as a `null`
  * from [RedisClient]) returns normally and counts as a success. [ping] stays outside the breaker,
  * matching Go's `Ping`, which never consults it. Encoding/decoding sits outside the breaker too, so a
@@ -65,10 +69,10 @@ public class RedisCache<T : Any> internal constructor(
         codec: CacheCodec<T>,
         expiration: Duration,
         cluster: Boolean = false,
-        logger: Logger? = null,
-        tracerProvider: TracerProvider? = null,
-        circuitBreaker: CircuitBreaker? = null,
-    ) : this(Observer(NAME, logger, tracerProvider), client, codec, expiration, cluster, ensureCircuitBreaker(circuitBreaker))
+        logger: Logger = NoopLogger,
+        tracerProvider: TracerProvider = NoopTracerProvider,
+        circuitBreaker: CircuitBreaker = NoopCircuitBreaker,
+    ) : this(Observer(NAME, logger, tracerProvider), client, codec, expiration, cluster, circuitBreaker)
 
     private val ttlMillis: Long get() = expiration.inWholeMilliseconds
 
@@ -105,16 +109,25 @@ public class RedisCache<T : Any> internal constructor(
             if (keys.isEmpty()) {
                 return@span emptyMap()
             }
-            // An open breaker degrades to an empty result, matching Go's GetMany.
-            degrade(emptyMap<String, T>()) {
-                buildMap {
-                    for (group in slotGroups(keys)) {
-                        val values = client.mget(group)
-                        group.forEachIndexed { idx, key ->
-                            val raw = values.getOrNull(idx) ?: return@forEachIndexed
-                            put(key, codec.decode(raw))
+            // Transport under the breaker; an open breaker degrades to an empty result, matching Go's
+            // GetMany. Decoding stays OUTSIDE the breaker (as in the single-key get path) so one corrupt
+            // value is a caller-side codec error, not a spurious transport failure counted against a
+            // healthy Redis.
+            val raw: Map<String, String> =
+                degrade(emptyMap()) {
+                    buildMap {
+                        for (group in slotGroups(keys)) {
+                            val values = client.mget(group)
+                            group.forEachIndexed { idx, key ->
+                                val value = values.getOrNull(idx) ?: return@forEachIndexed
+                                put(key, value)
+                            }
                         }
                     }
+                }
+            buildMap {
+                for ((key, value) in raw) {
+                    put(key, codec.decode(value))
                 }
             }
         }
@@ -145,20 +158,33 @@ public class RedisCache<T : Any> internal constructor(
      * Runs [block] under the breaker but returns [onOpen] instead of throwing when the breaker is open
      * — the coroutine-native analog of Go's `if CannotProceed() { return <miss/empty> }`. A transport
      * failure inside [block] still propagates (and counts as a breaker failure); only `ErrCircuitBroken`
-     * (the open-breaker rejection) is turned into graceful degradation.
+     * (the open-breaker rejection) is turned into graceful degradation. When it degrades, it flags the
+     * span with [CACHE_DEGRADED] and warns, so shed load is visible instead of looking like a healthy
+     * miss/no-op. An [Operation] receiver so the flag lands on the current op's span.
      */
-    private suspend fun <R> degrade(
+    private suspend fun <R> Operation.degrade(
         onOpen: R,
         block: suspend () -> R,
     ): R =
         try {
             circuitBreaker.execute(block)
         } catch (e: PlatformException) {
-            if (isError(e, ErrCircuitBroken)) onOpen else throw e
+            if (isError<CircuitBrokenException>(e)) {
+                markDegraded()
+                onOpen
+            } else {
+                throw e
+            }
         }
 
     /** [degrade] for a write op: an open breaker makes the call a silent no-op, as Go's Set/Delete/SetMany do. */
-    private suspend fun degradeUnit(block: suspend () -> Unit): Unit = degrade(Unit, block)
+    private suspend fun Operation.degradeUnit(block: suspend () -> Unit): Unit = degrade(Unit, block)
+
+    /** Records that the breaker shed this op: a span attribute plus a warn log, so degradation is not silent. */
+    private fun Operation.markDegraded() {
+        set(CACHE_DEGRADED, true)
+        logger.warn("redis cache circuit breaker open; shedding load and degrading to a miss/no-op")
+    }
 
     /**
      * Splits [keys] into batches safe for a single MGET/EVAL: one group for a single-node client, one
@@ -173,5 +199,9 @@ public class RedisCache<T : Any> internal constructor(
 
     private companion object {
         const val NAME = "redis_cache"
+
+        // Span attribute set when the breaker sheds an op, distinguishing degraded load-shedding from a
+        // healthy miss/write.
+        const val CACHE_DEGRADED = "cache.degraded"
     }
 }

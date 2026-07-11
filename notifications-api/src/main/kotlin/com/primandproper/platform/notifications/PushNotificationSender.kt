@@ -1,26 +1,38 @@
 package com.primandproper.platform.notifications
 
-/** The platform token for iOS devices, routed to APNs. Mirrors platform-go's `platformIOS`. */
-public const val PLATFORM_IOS: String = "ios"
+/**
+ * The mobile platform a push is addressed to — APNs for [IOS], FCM for [ANDROID]. Replaces the former
+ * stringly-typed `platform` field (and the `PLATFORM_IOS`/`PLATFORM_ANDROID` string consts) so a typo
+ * fails at compile time instead of at runtime. Port of platform-go's `platformIOS`/`platformAndroid`.
+ *
+ * [wireName] is the lowercase token (`ios`/`android`) a backend maps to at the edge when it needs the
+ * wire/observability string — e.g. the value recorded under [NotificationKeys.PLATFORM].
+ */
+public enum class Platform(
+    public val wireName: String,
+) {
+    /** iOS devices, routed to APNs. Mirrors platform-go's `platformIOS`. */
+    IOS("ios"),
 
-/** The platform token for Android devices, routed to FCM. Mirrors platform-go's `platformAndroid`. */
-public const val PLATFORM_ANDROID: String = "android"
+    /** Android devices, routed to FCM. Mirrors platform-go's `platformAndroid`. */
+    ANDROID("android"),
+}
 
 /**
  * Thrown when a push is addressed to a platform that has no configured sender (e.g. an iOS token when
  * APNs is not wired). Port of platform-go's `mobile.ErrPlatformNotSupported`.
  */
 public class PlatformNotSupportedException(
-    public val platform: String,
-) : IllegalStateException("push notifications not configured for platform \"$platform\"")
+    public val platform: Platform,
+) : IllegalStateException("push notifications not configured for platform \"${platform.wireName}\"")
 
 /**
  * A service that SENDS push notifications to devices or topics — the port of platform-go's
  * `mobile.PushNotificationSender`.
  *
- * DIRECTION: this is the *server* side. A backend routes by [platform] — APNs for `ios`, FCM for
- * `android` — and delivers to a device token or a subscription topic. Go's methods thread a
- * `context.Context` and return an `error`; this port suspends instead (cancellation and trace context
+ * DIRECTION: this is the *server* side. A backend routes by [Platform] — APNs for [Platform.IOS], FCM
+ * for [Platform.ANDROID] — and delivers to a device token or a subscription topic. Go's methods thread
+ * a `context.Context` and return an `error`; this port suspends instead (cancellation and trace context
  * ride the coroutine context) and signals failure by throwing, the idiomatic Kotlin shape.
  *
  * Backends live in sibling modules (`:notifications-fcm`); the noop and mock doubles ship here. The
@@ -29,11 +41,11 @@ public class PlatformNotSupportedException(
  */
 public interface PushNotificationSender {
     /**
-     * Sends [message] to a single device [token] on [platform] (`ios`/`android`), throwing on
-     * failure. Throws [PlatformNotSupportedException] when the backend has no sender for [platform].
+     * Sends [message] to a single device [token] on [platform], throwing on failure. Throws
+     * [PlatformNotSupportedException] when the backend has no sender for [platform].
      */
     public suspend fun sendPush(
-        platform: String,
+        platform: Platform,
         token: String,
         message: PushMessage,
     )
@@ -44,7 +56,7 @@ public interface PushNotificationSender {
      * throw [PlatformNotSupportedException].
      */
     public suspend fun sendToTopic(
-        platform: String,
+        platform: Platform,
         topic: String,
         message: PushMessage,
     )

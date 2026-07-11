@@ -24,33 +24,39 @@ public enum class PaymentProvider(
     }
 }
 
+/** Thrown when an enabled [CapitalismConfig] has no [PaymentProvider] selected. */
+public class InvalidPaymentProviderException :
+    IllegalArgumentException(
+        "an enabled capitalism config requires a payment provider, one of ${PaymentProvider.entries.map { it.value }}",
+    )
+
 /**
  * Provider-agnostic capitalism configuration. Port of the portable part of platform-go's
  * `config.Config`: whether payments are [enabled] and the chosen [provider].
  *
+ * [provider] is a typed [PaymentProvider], resolved from its string form once at the parse edge
+ * ([PaymentProvider.fromValue]); `null` means no provider is selected. Because the field is already
+ * typed, an unknown provider can never reach the config — only the "enabled without a provider" case
+ * remains for [validate] to reject.
+ *
  * The Stripe credentials (`stripe.Config`) live with the backend in `:capitalism-stripe`
  * (`StripeConfig`), so this API module stays pure-JVM and free of any vendor dependency — the
- * `provideCapitalismImplementation` factory that unites them also lives there, matching how Go's
+ * `PaymentManager` factory that unites them also lives there, matching how Go's
  * `capitalism/config` package sits above both `capitalism/noop` and `capitalism/stripe`.
  */
 public data class CapitalismConfig(
     val enabled: Boolean = false,
-    val provider: String = "",
+    val provider: PaymentProvider? = null,
 ) {
     /**
-     * Validates the config, returning a human-readable reason on failure or `null` when valid — the
-     * analog of Go's `Config.ValidateWithContext`. A disabled config always validates (Go returns
-     * `nil` early when `!cfg.Enabled`); an enabled config must name a known [provider]
-     * (`validation.In(StripeProvider)`).
+     * Validates the config, throwing on failure — the analog of Go's `Config.ValidateWithContext`,
+     * and matching the throwing `validate()` convention every other platform config uses (e.g.
+     * `EmailConfig`, `LlmConfig`). A disabled config always validates (Go returns `nil` early when
+     * `!cfg.Enabled`); an enabled config must have a [provider] selected (`validation.In(StripeProvider)`),
+     * else [InvalidPaymentProviderException] is thrown.
      */
-    public fun validate(): String? {
-        if (!enabled) return null
-        if (PaymentProvider.fromValue(provider) == null) {
-            return "provider must be one of ${PaymentProvider.entries.map { it.value }}, was \"$provider\""
-        }
-        return null
+    public fun validate() {
+        if (!enabled) return
+        if (provider == null) throw InvalidPaymentProviderException()
     }
-
-    /** Whether this config passes [validate]. */
-    public val isValid: Boolean get() = validate() == null
 }

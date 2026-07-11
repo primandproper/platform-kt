@@ -5,9 +5,10 @@ package com.primandproper.platform.search.text
  *
  * Go's `Search` returns `(ids []*T, err error)` — a slice of decoded documents. Kotlin has no
  * `(value, error)` split, so [search] returns `List<T>` and signals failure by throwing. [T] is
- * bound to `Any` so decoded documents are non-null, matching how Go dereferences each `*T` hit.
+ * bound to `Any` so decoded documents are non-null, matching how Go dereferences each `*T` hit — a
+ * SAM interface, since `search` is its only method.
  */
-public interface IndexSearcher<T : Any> {
+public fun interface IndexSearcher<T : Any> {
     /** Runs [query] against the index and returns the matching documents (possibly empty). */
     public suspend fun search(query: String): List<T>
 }
@@ -15,15 +16,16 @@ public interface IndexSearcher<T : Any> {
 /**
  * The write/management half of a text search index. Port of platform-go's `textsearch.IndexManager`.
  *
- * It is deliberately untyped in the document: Go's `Index(ctx, id, value any)` takes `any`, so a
- * single manager can index heterogeneous payloads. The stored form is produced by a [DocumentCodec]
- * at the backend boundary, mirroring how Go json-encodes the value before shipping it to the engine.
+ * Typed to the index's document type [T]: Go's `Index(ctx, id, value any)` takes `any`, but that
+ * hole let a `User` be indexed into an `Index<Product>`, so platform-kt narrows it — heterogeneous
+ * indexing is no longer a goal. The stored form is produced by a [DocumentCodec] at the backend
+ * boundary, mirroring how Go json-encodes the value before shipping it to the engine.
  */
-public interface IndexManager {
+public interface IndexManager<T : Any> {
     /** Indexes [value] under [id], overwriting any existing document with that id. */
     public suspend fun index(
         id: String,
-        value: Any,
+        value: T,
     )
 
     /** Removes the document with [id]; idempotent, so deleting an absent id is not an error. */
@@ -40,4 +42,4 @@ public interface IndexManager {
  */
 public interface Index<T : Any> :
     IndexSearcher<T>,
-    IndexManager
+    IndexManager<T>

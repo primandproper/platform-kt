@@ -1,5 +1,7 @@
 package com.primandproper.platform.secrets
 
+import com.primandproper.platform.observability.SuspendCloseable
+
 /**
  * Provides read access to secrets by name. Port of platform-go's `secrets.SecretSource`.
  *
@@ -14,7 +16,7 @@ package com.primandproper.platform.secrets
  * is enforced by never handing the value to the observability pillars in the first place. See the
  * `NOTE` in [com.primandproper.platform.secrets.env.EnvSecretSource].
  */
-public interface SecretSource {
+public interface SecretSource : SuspendCloseable {
     /**
      * Returns the secret stored under [name].
      *
@@ -23,8 +25,11 @@ public interface SecretSource {
      */
     public suspend fun getSecret(name: String): String
 
-    /** Releases any resources (network clients, handles). A no-op for the in-process backends. */
-    public fun close()
+    /**
+     * Releases any resources (network clients, handles). A no-op for the in-process backends.
+     * `suspend` via [SuspendCloseable] because the network-backed backends close a real client.
+     */
+    override suspend fun close()
 }
 
 /**

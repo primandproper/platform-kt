@@ -3,14 +3,16 @@ package com.primandproper.platform.search.text.elasticsearch
 import com.primandproper.platform.errors.PlatformException
 import com.primandproper.platform.observability.Keys
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.Observer
 import com.primandproper.platform.observability.TracerProvider
 import com.primandproper.platform.observability.span
 import com.primandproper.platform.search.text.DocumentCodec
 import com.primandproper.platform.search.text.Index
 
-/** Indicates an empty query was provided to [ElasticsearchIndexManager.search]. Mirrors Go's `ErrEmptyQueryProvided`. */
-public val ErrEmptyQueryProvided: PlatformException = PlatformException("empty search query provided")
+/** Thrown when an empty query was provided to [ElasticsearchIndexManager.search]. Mirrors Go's `ErrEmptyQueryProvided`. */
+public class EmptyQueryProvidedException : PlatformException("empty search query provided")
 
 /**
  * An Elasticsearch-backed text [Index]. Port of platform-go's `search/text/elasticsearch.indexManager[T]`.
@@ -49,8 +51,8 @@ public class ElasticsearchIndexManager<T : Any> internal constructor(
         client: ElasticsearchClient,
         codec: DocumentCodec<T>,
         indexName: String,
-        logger: Logger? = null,
-        tracerProvider: TracerProvider? = null,
+        logger: Logger = NoopLogger,
+        tracerProvider: TracerProvider = NoopTracerProvider,
     ) : this(Observer("search_${indexName.lowercase()}", logger, tracerProvider), client, codec, indexName)
 
     private val index: String = indexName.lowercase()
@@ -71,7 +73,7 @@ public class ElasticsearchIndexManager<T : Any> internal constructor(
 
     override suspend fun index(
         id: String,
-        value: Any,
+        value: T,
     ) {
         o11y.span("Index") {
             set(ID_KEY, id)
@@ -85,7 +87,7 @@ public class ElasticsearchIndexManager<T : Any> internal constructor(
         o11y.span("Search") {
             set(Keys.SEARCH_QUERY, query)
             if (query.isEmpty()) {
-                throw ErrEmptyQueryProvided
+                throw EmptyQueryProvidedException()
             }
             val sources = client.search(index, multiMatchQuery(query))
             val results = sources.map { codec.decode(it) }

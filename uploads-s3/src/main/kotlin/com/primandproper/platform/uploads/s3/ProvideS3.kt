@@ -1,6 +1,8 @@
 package com.primandproper.platform.uploads.s3
 
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.TracerProvider
 import com.primandproper.platform.uploads.objectstorage.StorageConfig
 import com.primandproper.platform.uploads.objectstorage.StorageProvider
@@ -25,20 +27,20 @@ import software.amazon.awssdk.services.s3.S3AsyncClient
 public fun newS3UploadManager(
     config: StorageConfig,
     s3Client: S3Client? = null,
-    logger: Logger? = null,
-    tracerProvider: TracerProvider? = null,
+    logger: Logger = NoopLogger,
+    tracerProvider: TracerProvider = NoopTracerProvider,
 ): Uploader {
     config.validate()
 
     val client =
-        s3Client ?: when (config.resolvedProvider()) {
+        s3Client ?: when (config.provider) {
             StorageProvider.S3 -> AwsS3Client(S3AsyncClient.builder().build(), config.bucketName)
             StorageProvider.R2 ->
                 throw UnsupportedOperationException("TODO(r2): wire the R2 endpoint override from r2Config")
             StorageProvider.BACKBLAZE_B2 ->
                 throw UnsupportedOperationException("TODO(b2): wire the Backblaze B2 endpoint override from backblazeB2Config")
             else ->
-                throw UnsupportedOperationException("newS3UploadManager only serves the s3 provider; got \"${config.provider}\"")
+                throw UnsupportedOperationException("newS3UploadManager only serves the s3 provider; got \"${config.provider.value}\"")
         }
 
     return Uploader(maybePrefixed(S3Bucket(client), config.bucketPrefix), config.bucketName, logger, tracerProvider)

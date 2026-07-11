@@ -13,17 +13,19 @@ public data class StripeConfig(
     val webhookSecret: String = "",
 ) {
     /**
-     * Validates the config, returning a human-readable reason on failure or `null` when valid — the
-     * analog of Go's `Config.ValidateWithContext`, which requires the webhook secret
-     * (`validation.Field(&cfg.WebhookSecret, validation.Required)`). Note this is a config-time check;
+     * Validates the config, throwing [InvalidStripeConfigException] on failure — the analog of Go's
+     * `Config.ValidateWithContext`, which requires the webhook secret
+     * (`validation.Field(&cfg.WebhookSecret, validation.Required)`), and matching the throwing
+     * `validate()` convention every other platform config uses. Note this is a config-time check;
      * the factory itself does not enforce it (Go builds a manager from an empty `&Config{}`), so a
      * caller that only performs outbound operations can skip it.
      */
-    public fun validate(): String? {
-        if (webhookSecret.isBlank()) return "webhook secret is required"
-        return null
+    public fun validate() {
+        if (webhookSecret.isBlank()) throw InvalidStripeConfigException("webhook secret is required")
     }
-
-    /** Whether this config passes [validate]. */
-    public val isValid: Boolean get() = validate() == null
 }
+
+/** Thrown when [StripeConfig.validate] finds the config incomplete (e.g. a missing webhook secret). */
+public class InvalidStripeConfigException(
+    reason: String,
+) : IllegalArgumentException(reason)

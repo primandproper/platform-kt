@@ -13,36 +13,36 @@ class NoopFeatureFlagManagerTest {
     @Test
     fun `canUseFeature returns false`() =
         runTest {
-            assertFalse(NoopFeatureFlagManager().canUseFeature("some-feature", evalCtx()))
+            assertFalse(NoopFeatureFlagManager.canUseFeature("some-feature", evalCtx()))
         }
 
     @Test
     fun `getStringValue returns default`() =
         runTest {
-            assertEquals("fallback", NoopFeatureFlagManager().getStringValue("some-feature", "fallback", evalCtx()))
+            assertEquals("fallback", NoopFeatureFlagManager.getStringValue("some-feature", "fallback", evalCtx()))
         }
 
     @Test
     fun `getInt64Value returns default`() =
         runTest {
-            assertEquals(42L, NoopFeatureFlagManager().getInt64Value("some-feature", 42L, evalCtx()))
+            assertEquals(42L, NoopFeatureFlagManager.getInt64Value("some-feature", 42L, evalCtx()))
         }
 
     @Test
     fun `getFloat64Value returns default`() =
         runTest {
-            assertEquals(3.14, NoopFeatureFlagManager().getFloat64Value("some-feature", 3.14, evalCtx()), 1e-9)
+            assertEquals(3.14, NoopFeatureFlagManager.getFloat64Value("some-feature", 3.14, evalCtx()), 1e-9)
         }
 
     @Test
     fun `getObjectValue returns default`() =
         runTest {
             val def = mapOf("k" to "v")
-            assertEquals(def, NoopFeatureFlagManager().getObjectValue("some-feature", def, evalCtx()))
+            assertEquals(def, NoopFeatureFlagManager.getObjectValue("some-feature", def, evalCtx()))
         }
 
     @Test
     fun `close does not throw`() {
-        NoopFeatureFlagManager().close()
+        NoopFeatureFlagManager.close()
     }
 }

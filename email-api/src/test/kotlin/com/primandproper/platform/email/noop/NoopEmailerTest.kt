@@ -9,7 +9,7 @@ class NoopEmailerTest {
     @Test
     fun `sendEmail is a no-op that does not throw`() =
         runTest {
-            NoopEmailer().sendEmail(
+            NoopEmailer.sendEmail(
                 OutboundEmailMessage(
                     toAddress = "to@example.com",
                     fromAddress = "from@example.com",

@@ -12,9 +12,10 @@ class NoopEventReporterTest {
     }
 
     @Test
-    fun `close does not throw`() {
-        NoopEventReporter.close()
-    }
+    fun `close does not throw`() =
+        runTest {
+            NoopEventReporter.close()
+        }
 
     @Test
     fun `addUser returns normally`() =

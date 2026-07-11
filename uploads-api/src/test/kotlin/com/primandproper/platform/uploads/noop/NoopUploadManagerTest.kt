@@ -15,7 +15,7 @@ import kotlin.test.assertTrue
 
 /** Port of platform-go's `uploads/noop.TestUploadManager` — every op is a safe no-op. */
 class NoopUploadManagerTest {
-    private val noop = NoopUploadManager()
+    private val noop = NoopUploadManager
 
     @Test
     fun `save drains the source and open returns empty`() =

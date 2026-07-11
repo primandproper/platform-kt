@@ -7,40 +7,40 @@ import kotlin.test.assertFailsWith
 
 class PublisherMockTest {
     @Test
-    fun `it records publish, publishAsync, and stop calls`() =
+    fun `it records publish, publishAsync, and close calls`() =
         runTest {
-            val mock = PublisherMock(publishFunc = {}, publishAsyncFunc = {}, stopFunc = {})
+            val mock = PublisherMock<String>(publishFunc = {}, publishAsyncFunc = {}, closeFunc = {})
             mock.publish("a")
             mock.publishAsync("b")
-            mock.stop()
+            mock.close()
 
-            assertEquals(listOf<Any>("a"), mock.publishCalls)
-            assertEquals(listOf<Any>("b"), mock.publishAsyncCalls)
-            assertEquals(1, mock.stopCalls.size)
+            assertEquals(listOf("a"), mock.publishCalls)
+            assertEquals(listOf("b"), mock.publishAsyncCalls)
+            assertEquals(1, mock.closeCalls)
         }
 
     @Test
     fun `an unmocked method throws`() =
         runTest {
-            assertFailsWith<IllegalStateException> { PublisherMock().publish("x") }
+            assertFailsWith<IllegalStateException> { PublisherMock<String>().publish("x") }
         }
 
     @Test
-    fun `the provider mock records providePublisher, ping, and close`() =
+    fun `the provider mock records publisher, ping, and close`() =
         runTest {
-            val published = PublisherMock(publishFunc = {})
+            val published = PublisherMock<String>(publishFunc = {})
             val mock =
                 PublisherProviderMock(
                     closeFunc = {},
                     pingFunc = {},
-                    providePublisherFunc = { published },
+                    publisherFunc = { published },
                 )
-            mock.providePublisher("topic")
+            mock.publisher("topic")
             mock.ping()
             mock.close()
 
-            assertEquals(listOf("topic"), mock.providePublisherCalls)
-            assertEquals(1, mock.pingCalls.size)
-            assertEquals(1, mock.closeCalls.size)
+            assertEquals(listOf("topic"), mock.publisherCalls)
+            assertEquals(1, mock.pingCalls)
+            assertEquals(1, mock.closeCalls)
         }
 }

@@ -1,6 +1,7 @@
 package com.primandproper.platform.routing.ktor
 
 import com.primandproper.platform.observability.Observer
+import com.primandproper.platform.observability.asCoroutineContextElement
 import com.primandproper.platform.routing.HttpHandler
 import com.primandproper.platform.routing.Middleware
 import com.primandproper.platform.routing.MountableHandler
@@ -13,14 +14,21 @@ import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.ApplicationCallPipeline
 import io.ktor.server.application.call
+import io.ktor.server.request.ApplicationRequest
 import io.ktor.server.request.header
 import io.ktor.server.request.httpMethod
 import io.ktor.server.request.path
 import io.ktor.server.response.respond
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
+import io.opentelemetry.api.trace.StatusCode
+import io.opentelemetry.api.trace.propagation.W3CTraceContextPropagator
+import io.opentelemetry.context.propagation.TextMapGetter
+import kotlinx.coroutines.withContext
 import kotlin.coroutines.cancellation.CancellationException
+import com.primandproper.platform.routing.HttpMethod as PlatformHttpMethod
 import io.ktor.server.routing.Route as KtorRoute
+import io.opentelemetry.context.Context as OtelContext
 
 /**
  * The Ktor-backed [Router] — the analog of platform-go's `routing/chi.router`. It implements the
@@ -87,7 +95,7 @@ public class KtorRouter internal constructor(
         handler: HttpHandler,
     ) {
         val mws = ambientMiddleware
-        routeList += Route(ANY_METHOD, pattern)
+        routeList += Route(null, pattern)
         registrations += {
             route(pattern) {
                 handle { runComposed(handler, mws, call) }
@@ -95,74 +103,67 @@ public class KtorRouter internal constructor(
         }
     }
 
-    override fun handleFunc(
-        pattern: String,
-        handler: HttpHandler,
-    ): Unit = handle(pattern, handler)
-
     override fun connect(
         pattern: String,
         handler: HttpHandler,
-    ): Unit = register("CONNECT", pattern, handler, emptyList())
+    ): Unit = register(PlatformHttpMethod.CONNECT, pattern, handler, emptyList())
 
     override fun delete(
         pattern: String,
         handler: HttpHandler,
-    ): Unit = register("DELETE", pattern, handler, emptyList())
+    ): Unit = register(PlatformHttpMethod.DELETE, pattern, handler, emptyList())
 
     override fun get(
         pattern: String,
         handler: HttpHandler,
-    ): Unit = register("GET", pattern, handler, emptyList())
+    ): Unit = register(PlatformHttpMethod.GET, pattern, handler, emptyList())
 
     override fun head(
         pattern: String,
         handler: HttpHandler,
-    ): Unit = register("HEAD", pattern, handler, emptyList())
+    ): Unit = register(PlatformHttpMethod.HEAD, pattern, handler, emptyList())
 
     override fun options(
         pattern: String,
         handler: HttpHandler,
-    ): Unit = register("OPTIONS", pattern, handler, emptyList())
+    ): Unit = register(PlatformHttpMethod.OPTIONS, pattern, handler, emptyList())
 
     override fun patch(
         pattern: String,
         handler: HttpHandler,
-    ): Unit = register("PATCH", pattern, handler, emptyList())
+    ): Unit = register(PlatformHttpMethod.PATCH, pattern, handler, emptyList())
 
     override fun post(
         pattern: String,
         handler: HttpHandler,
-    ): Unit = register("POST", pattern, handler, emptyList())
+    ): Unit = register(PlatformHttpMethod.POST, pattern, handler, emptyList())
 
     override fun put(
         pattern: String,
         handler: HttpHandler,
-    ): Unit = register("PUT", pattern, handler, emptyList())
+    ): Unit = register(PlatformHttpMethod.PUT, pattern, handler, emptyList())
 
     override fun trace(
         pattern: String,
         handler: HttpHandler,
-    ): Unit = register("TRACE", pattern, handler, emptyList())
+    ): Unit = register(PlatformHttpMethod.TRACE, pattern, handler, emptyList())
 
     override fun addRoute(
-        method: String,
+        method: PlatformHttpMethod,
         path: String,
         handler: HttpHandler,
         vararg middleware: Middleware,
     ): Unit = register(method, path, handler, middleware.toList())
 
     private fun register(
-        method: String,
+        method: PlatformHttpMethod,
         path: String,
         handler: HttpHandler,
         extra: List<Middleware>,
     ) {
-        val normalized = method.trim().uppercase()
-        require(normalized in VALID_METHODS) { "invalid method: $method" }
         val mws = ambientMiddleware + extra
-        routeList += Route(normalized, path)
-        val ktorMethod = HttpMethod.parse(normalized)
+        routeList += Route(method, path)
+        val ktorMethod = HttpMethod.parse(method.name)
         registrations += {
             route(path, ktorMethod) {
                 handle { runComposed(handler, mws, call) }
@@ -209,6 +210,11 @@ public class KtorRouter internal constructor(
      * are recorded, panics are recovered into a 500, and the served status/elapsed are logged unless
      * silenced. Go keeps recovery and logging as two middlewares; they are one interceptor here
      * because Ktor gives a single pipeline hook that both need to straddle.
+     *
+     * The request span joins any distributed trace the caller propagated (see [extractRemoteContext])
+     * and is installed as the current context around [proceed] so spans opened inside the handler
+     * parent to `http_request` rather than to the root — the analog of the coroutine element the
+     * [com.primandproper.platform.observability.span] scope installs.
      */
     private fun installObservability(application: Application) {
         application.intercept(ApplicationCallPipeline.Monitoring) {
@@ -218,27 +224,43 @@ public class KtorRouter internal constructor(
                 return@intercept
             }
 
-            val op = observer.begin(SPAN_NAME)
+            // Parent the span under the caller's W3C trace context so a cross-service trace stays
+            // connected; makeCurrent installs it just long enough for begin() to read it as the parent.
+            val remoteContext = extractRemoteContext(call.request)
+            val op = remoteContext.makeCurrent().use { observer.begin(SPAN_NAME) }
             op.set("http.method", call.request.httpMethod.value)
             op.set("http.path", path)
             op.set("http.request_id", requestIdOf(call))
             val startNanos = System.nanoTime()
+            var acknowledgedFailure = false
             try {
-                proceed()
+                withContext(op.span.asCoroutineContextElement()) {
+                    proceed()
+                }
             } catch (cancellation: CancellationException) {
                 throw cancellation
             } catch (failure: Throwable) {
                 op.acknowledge(failure, "recovering from panic in HTTP handler")
+                acknowledgedFailure = true
                 try {
                     call.respond(HttpStatusCode.InternalServerError)
                 } catch (_: Throwable) {
                     // The response was already (partly) written; nothing more we can safely do.
                 }
             } finally {
+                val status = call.response.status()
+                // Record the served status on the span itself — it previously only reached the log.
+                status?.let { op.set("http.status_code", it.value) }
+                // A 5xx the handler *returned* (rather than threw) never went through acknowledge above,
+                // so it would otherwise leave the span un-errored; mark it ERROR here. A thrown failure
+                // was already recorded, so don't double-mark it.
+                if (!acknowledgedFailure && status != null && status.value >= 500) {
+                    op.span.setStatus(StatusCode.ERROR, "server error: ${status.value}")
+                }
                 if (!settings.silenceRouteLogging) {
                     val elapsedMs = (System.nanoTime() - startNanos) / 1_000_000
                     op.logger
-                        .withValue("status", call.response.status()?.value)
+                        .withValue("status", status?.value)
                         .withValue("elapsed", elapsedMs)
                         .info("response served")
                 }
@@ -247,14 +269,30 @@ public class KtorRouter internal constructor(
         }
     }
 
+    /**
+     * Extracts the W3C trace context (`traceparent`/`tracestate`) the caller propagated in [request]'s
+     * headers, so the request span joins the caller's distributed trace across the hop. Uses the same
+     * [W3CTraceContextPropagator] the SDK is configured with (see `OtelTracerProvider`), reached as the
+     * stateless singleton rather than threaded through the [Observer] abstraction. Extraction starts
+     * from [OtelContext.root] and, absent any trace headers, returns it unchanged — so the span cleanly
+     * becomes a new root instead of inheriting whatever context happens to be current on the thread.
+     */
+    private fun extractRemoteContext(request: ApplicationRequest): OtelContext =
+        W3CTraceContextPropagator.getInstance().extract(OtelContext.root(), request, KtorHeaderGetter)
+
     private companion object {
         const val SPAN_NAME = "http_request"
 
-        /** The pseudo-method [routes] records for [handle]/[handleFunc], which match every verb. */
-        const val ANY_METHOD = "*"
+        /** Reads request headers for the OTel propagator's `extract`, case-insensitively via Ktor's [io.ktor.http.Headers]. */
+        val KtorHeaderGetter =
+            object : TextMapGetter<ApplicationRequest> {
+                override fun keys(carrier: ApplicationRequest): Iterable<String> = carrier.headers.names()
 
-        val VALID_METHODS =
-            setOf("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "CONNECT", "OPTIONS", "TRACE")
+                override fun get(
+                    carrier: ApplicationRequest?,
+                    key: String,
+                ): String? = carrier?.headers?.get(key)
+            }
 
         /** Joins a subrouter prefix with a child path for the [routes] listing, collapsing a doubled slash. */
         fun joinPaths(

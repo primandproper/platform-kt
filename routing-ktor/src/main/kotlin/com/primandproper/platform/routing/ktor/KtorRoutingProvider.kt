@@ -1,6 +1,8 @@
 package com.primandproper.platform.routing.ktor
 
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.Observer
 import com.primandproper.platform.observability.TracerProvider
 import com.primandproper.platform.routing.DefaultRouteParamManager
@@ -18,10 +20,10 @@ import com.primandproper.platform.routing.RoutingProvider
  * pillars are bundled into one [Observer] here (the metrics provider has no analog yet — see
  * `TODO(metrics)` in [KtorRouter]).
  */
-public fun provideRouter(
+public fun Router(
     config: RoutingConfig,
-    logger: Logger? = null,
-    tracerProvider: TracerProvider? = null,
+    logger: Logger = NoopLogger,
+    tracerProvider: TracerProvider = NoopTracerProvider,
 ): Router {
     config.validate()
     return when (config.provider) {
@@ -35,7 +37,7 @@ public fun provideRouter(
  * Every provider shares the framework-independent [DefaultRouteParamManager], since path-parameter
  * access is abstracted in `:routing-api`.
  */
-public fun provideRouteParamManager(config: RoutingConfig): RouteParamManager =
+public fun RouteParamManager(config: RoutingConfig): RouteParamManager =
     when (config.provider) {
         RoutingProvider.KTOR -> DefaultRouteParamManager
     }

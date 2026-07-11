@@ -12,7 +12,7 @@ public class NoopIndex<T : Any> : Index<T> {
 
     override suspend fun index(
         id: String,
-        value: Any,
+        value: T,
     ) {
     }
 

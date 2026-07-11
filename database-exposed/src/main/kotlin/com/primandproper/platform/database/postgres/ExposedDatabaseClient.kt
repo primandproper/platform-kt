@@ -2,12 +2,15 @@ package com.primandproper.platform.database.postgres
 
 import com.primandproper.platform.database.DatabaseClient
 import com.primandproper.platform.database.Migrator
+import com.primandproper.platform.database.SqlQueryExecutor
 import com.primandproper.platform.database.SqlQueryExecutorAndTransactionManager
 import com.primandproper.platform.database.config.DatabaseConfig
-import com.primandproper.platform.database.config.DatabaseProviders
+import com.primandproper.platform.database.config.DatabaseProvider
 import com.primandproper.platform.errors.joinErrors
 import com.primandproper.platform.errors.newError
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.Observer
 import com.primandproper.platform.observability.TracerProvider
 import com.primandproper.platform.observability.span
@@ -33,7 +36,7 @@ import kotlin.time.Duration.Companion.seconds
  *
  * Every connection lifecycle event is instrumented through an [Observer] span exactly where the Go
  * client calls `o11y.Begin` — [isReady]/the ping loop, [rollbackTransaction], and construction (via
- * [provideDatabaseClient]).
+ * [postgresDatabaseClient]).
  *
  * TODO(metrics): Go registers `otelsql` DB-stats metrics and `db.sql.*` latency histograms through a
  * metrics provider. There is no metrics pillar in platform-kt's observability-api yet, so that is a
@@ -42,7 +45,7 @@ import kotlin.time.Duration.Companion.seconds
 public class ExposedDatabaseClient internal constructor(
     override val readDataSource: DataSource,
     override val writeDataSource: DataSource,
-    private val maxPingAttempts: Long,
+    private val maxPingAttempts: Int,
     private val pingWaitPeriod: Duration,
     private val o11y: Observer,
     private val timeFunc: () -> Instant,
@@ -60,10 +63,10 @@ public class ExposedDatabaseClient internal constructor(
     public constructor(
         readDataSource: DataSource,
         writeDataSource: DataSource,
-        maxPingAttempts: Long = DEFAULT_MAX_PING_ATTEMPTS,
+        maxPingAttempts: Int = DEFAULT_MAX_PING_ATTEMPTS,
         pingWaitPeriod: Duration = 1.seconds,
-        logger: Logger? = null,
-        tracerProvider: TracerProvider? = null,
+        logger: Logger = NoopLogger,
+        tracerProvider: TracerProvider = NoopTracerProvider,
         timeFunc: () -> Instant = { Instant.now() },
     ) : this(
         readDataSource,
@@ -84,6 +87,15 @@ public class ExposedDatabaseClient internal constructor(
     override fun currentTime(): Instant = timeFunc()
 
     /**
+     * A [JdbcSqlQueryExecutor] over the read pool for the redesigned Flow/Row query surface. Reuses this
+     * client's observer, so its `Query`/`QueryOne`/`Exec`/`WithPrepared` spans nest under the caller's.
+     */
+    public fun readExecutor(logQueries: Boolean = false): SqlQueryExecutor = JdbcSqlQueryExecutor(readDataSource, o11y, logQueries)
+
+    /** A [JdbcSqlQueryExecutor] over the write pool; see [readExecutor]. */
+    public fun writeExecutor(logQueries: Boolean = false): SqlQueryExecutor = JdbcSqlQueryExecutor(writeDataSource, o11y, logQueries)
+
+    /**
      * Reports whether both pools answer a ping, retrying up to [maxPingAttempts] with [pingWaitPeriod]
      * between attempts. Port of Go's `IsReady`/`waitForPing` — reads first, then writes when the write
      * pool differs.
@@ -91,7 +103,7 @@ public class ExposedDatabaseClient internal constructor(
     public suspend fun isReady(): Boolean =
         o11y.span("IsReady") {
             set("db.system", "postgresql")
-            set("db.ping.max_attempts", maxPingAttempts)
+            set("db.ping.max_attempts", maxPingAttempts.toLong())
 
             if (!waitForPing(readDataSource, "read")) {
                 return@span false
@@ -106,12 +118,14 @@ public class ExposedDatabaseClient internal constructor(
         dataSource: DataSource,
         connectionName: String,
     ): Boolean {
-        val attempts = maxPingAttempts.toInt()
+        val attempts = maxPingAttempts
         for (attempt in 0 until attempts) {
-            if (pingOnce(dataSource)) {
-                return true
-            }
+            val failure = pingOnce(dataSource) ?: return true
+
+            // Attach the failure cause so a persistently-refused pool is diagnosable, instead of the
+            // log only saying a ping "failed" with the reason dropped.
             o11y.logger.withValue("connection", connectionName).withValue("attempt_count", attempt)
+                .withError(failure)
                 .info("ping failed, waiting for db")
 
             // Don't sleep after the final attempt.
@@ -123,12 +137,17 @@ public class ExposedDatabaseClient internal constructor(
         return false
     }
 
-    private suspend fun pingOnce(dataSource: DataSource): Boolean =
+    /** One ping attempt: `null` means the pool answered; a non-null [Throwable] is why it did not. */
+    private suspend fun pingOnce(dataSource: DataSource): Throwable? =
         withContext(Dispatchers.IO) {
             try {
-                dataSource.connection.use { it.isValid(PING_TIMEOUT_SECONDS) }
-            } catch (_: Exception) {
-                false
+                if (dataSource.connection.use { it.isValid(PING_TIMEOUT_SECONDS) }) {
+                    null
+                } else {
+                    newError("database connection reported not valid")
+                }
+            } catch (e: Exception) {
+                e
             }
         }
 
@@ -176,7 +195,7 @@ public class ExposedDatabaseClient internal constructor(
 
     internal companion object {
         const val NAME: String = "db_client"
-        const val DEFAULT_MAX_PING_ATTEMPTS: Long = 50
+        const val DEFAULT_MAX_PING_ATTEMPTS: Int = 50
         const val PING_TIMEOUT_SECONDS: Int = 1
     }
 }
@@ -189,22 +208,23 @@ public class ExposedDatabaseClient internal constructor(
  * configured it is used for both; when neither is, this throws. Instrumented with a
  * `ProvideDatabaseClient` span recording `db.system` and whether each side was configured.
  */
-public fun provideDatabaseClient(
+public fun postgresDatabaseClient(
     config: DatabaseConfig,
-    logger: Logger? = null,
-    tracerProvider: TracerProvider? = null,
+    logger: Logger = NoopLogger,
+    tracerProvider: TracerProvider = NoopTracerProvider,
 ): DatabaseClient {
     val o11y = Observer(ExposedDatabaseClient.NAME, logger, tracerProvider)
     return o11y.spanBlocking("ProvideDatabaseClient") {
+        val writeConnection = config.writeConnection
         val readConfigured = config.readConnection.host.isNotBlank()
-        val writeConfigured = config.writeConnection.host.isNotBlank()
+        val writeConfigured = writeConnection != null && writeConnection.host.isNotBlank()
 
         set("db.system", "postgresql")
         set("db.read_configured", readConfigured)
         set("db.write_configured", writeConfigured)
 
         var readDs: DataSource? = if (readConfigured) buildPostgresDataSource(config, config.readConnection) else null
-        var writeDs: DataSource? = if (writeConfigured) buildPostgresDataSource(config, config.writeConnection) else null
+        var writeDs: DataSource? = if (writeConfigured) buildPostgresDataSource(config, writeConnection!!) else null
 
         if (readDs == null && writeDs == null) {
             throw newError("at least one of read or write connection must be provided")
@@ -249,18 +269,17 @@ private fun buildPostgresDataSource(
  *  - TODO(r2dbc): Go is blocking JDBC throughout; a fully non-blocking client would swap this for an
  *    R2DBC driver behind the same suspend contract.
  */
-public suspend fun provideDatabase(
+public suspend fun DatabaseClient(
     config: DatabaseConfig,
     migrator: Migrator? = null,
-    logger: Logger? = null,
-    tracerProvider: TracerProvider? = null,
+    logger: Logger = NoopLogger,
+    tracerProvider: TracerProvider = NoopTracerProvider,
 ): DatabaseClient {
     val client =
-        when (config.provider.trim().lowercase()) {
-            DatabaseProviders.POSTGRES -> provideDatabaseClient(config, logger, tracerProvider)
-            DatabaseProviders.MYSQL -> throw newError("mysql provider is not yet ported; TODO(mysql)")
-            DatabaseProviders.SQLITE -> throw newError("sqlite provider is not yet ported; TODO(sqlite)")
-            else -> throw newError("invalid database provider: \"${config.provider}\"")
+        when (config.provider) {
+            DatabaseProvider.POSTGRES -> postgresDatabaseClient(config, logger, tracerProvider)
+            DatabaseProvider.MYSQL -> throw newError("mysql provider is not yet ported; TODO(mysql)")
+            DatabaseProvider.SQLITE -> throw newError("sqlite provider is not yet ported; TODO(sqlite)")
         }
 
     if (config.runMigrations && migrator != null) {

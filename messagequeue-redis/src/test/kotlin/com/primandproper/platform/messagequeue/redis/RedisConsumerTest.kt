@@ -7,6 +7,7 @@ import com.primandproper.platform.messagequeue.EmptyTopicNameException
 import com.primandproper.platform.observability.testing.RecordingObserver
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -14,6 +15,7 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotSame
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
@@ -90,26 +92,78 @@ class RedisConsumerTest {
         }
 
     @Test
-    fun `the provider rejects an empty topic`() =
+    fun `messages emits each payload and cancelling collection closes the subscription`() =
         runTest {
-            val provider = provideRedisConsumerProvider(config(), client = FakeRedisPubSubClient())
-            assertFailsWith<EmptyTopicNameException> { provider.provideConsumer("") {} }
+            val client = FakeRedisPubSubClient()
+            val consumer = RedisConsumer(RecordingObserver(), client, "topic", ConsumerHandler {}, NoopCircuitBreaker)
+            val received = mutableListOf<String>()
+
+            val job =
+                backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+                    consumer.messages().collect { received += it.decodeToString() }
+                }
+            val sub = client.subscriptions.single()
+            sub.emit("hello".encodeToByteArray())
+            sub.emit("world".encodeToByteArray())
+            advanceUntilIdle()
+
+            assertEquals(listOf("hello", "world"), received)
+
+            job.cancelAndJoin()
+            assertTrue(sub.closed)
         }
 
     @Test
-    fun `the provider caches one consumer per topic`() =
+    fun `messages closes the subscription when the stream ends`() =
         runTest {
-            val provider = provideRedisConsumerProvider(config(), client = FakeRedisPubSubClient())
-            val first = provider.provideConsumer("t") {}
-            val second = provider.provideConsumer("t") {}
+            val client = FakeRedisPubSubClient()
+            val consumer = RedisConsumer(RecordingObserver(), client, "topic", ConsumerHandler {}, NoopCircuitBreaker)
+
+            val job =
+                backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+                    consumer.messages().collect {}
+                }
+            val sub = client.subscriptions.single()
+            sub.close() // ends the underlying message flow
+            advanceUntilIdle()
+            job.cancelAndJoin()
+
+            assertTrue(sub.closed)
+        }
+
+    @Test
+    fun `the provider rejects an empty topic`() =
+        runTest {
+            val provider = redisConsumerProvider(config(), client = FakeRedisPubSubClient())
+            assertFailsWith<EmptyTopicNameException> { provider.consumer("") {} }
+        }
+
+    @Test
+    fun `the provider caches one consumer per topic and handler`() =
+        runTest {
+            val provider = redisConsumerProvider(config(), client = FakeRedisPubSubClient())
+            val handler = ConsumerHandler {}
+            val first = provider.consumer("t", handler)
+            val second = provider.consumer("t", handler)
             assertSame(first, second)
+        }
+
+    @Test
+    fun `a different handler on the same topic gets its own consumer`() =
+        runTest {
+            // Regression for P2-5: a second, distinct handler must not silently receive the consumer
+            // bound to the first handler.
+            val provider = redisConsumerProvider(config(), client = FakeRedisPubSubClient())
+            val first = provider.consumer("t", ConsumerHandler {})
+            val second = provider.consumer("t", ConsumerHandler {})
+            assertNotSame(first, second)
         }
 
     @Test
     fun `the provider closes the shared client`() =
         runTest {
             val client = FakeRedisPubSubClient()
-            provideRedisConsumerProvider(config(), client = client).close()
+            redisConsumerProvider(config(), client = client).close()
             assertTrue(client.closed)
         }
 

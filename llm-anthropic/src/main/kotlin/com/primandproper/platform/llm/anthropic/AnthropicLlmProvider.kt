@@ -1,7 +1,7 @@
 package com.primandproper.platform.llm.anthropic
 
 import com.primandproper.platform.circuitbreaking.CircuitBreaker
-import com.primandproper.platform.circuitbreaking.ensureCircuitBreaker
+import com.primandproper.platform.circuitbreaking.NoopCircuitBreaker
 import com.primandproper.platform.httpclient.HttpClient
 import com.primandproper.platform.httpclient.HttpMethod
 import com.primandproper.platform.httpclient.HttpRequest
@@ -9,10 +9,16 @@ import com.primandproper.platform.llm.CompletionParams
 import com.primandproper.platform.llm.CompletionResult
 import com.primandproper.platform.llm.LlmKeys
 import com.primandproper.platform.llm.LlmProvider
+import com.primandproper.platform.llm.Role
+import com.primandproper.platform.llm.TokenUsage
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.Observer
 import com.primandproper.platform.observability.TracerProvider
 import com.primandproper.platform.observability.span
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -37,12 +43,21 @@ private data class ApiMessage(
     val content: String,
 )
 
-/** The Anthropic Messages `POST /v1/messages` request body: `{model, max_tokens, messages[]}`. */
+/**
+ * The Anthropic Messages `POST /v1/messages` request body: `{model, max_tokens, system?, messages[]}`.
+ *
+ * [system] carries the hoisted system prompt (Anthropic's Messages API only accepts `user`/`assistant`
+ * in [messages]; system prompts live in this top-level field). It is annotated
+ * [EncodeDefault.Mode.NEVER] so that — despite the encoder's `encodeDefaults = true` (needed for
+ * `max_tokens`) — a `null` system is omitted from the wire rather than serialized as `"system": null`.
+ */
+@OptIn(ExperimentalSerializationApi::class) // for [EncodeDefault] on [system]
 @Serializable
 private data class MessagesRequest(
     val model: String,
     @SerialName("max_tokens") val maxTokens: Int,
     val messages: List<ApiMessage>,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val system: String? = null,
 )
 
 /** One content block in the response; only `text` blocks carry the assistant's reply. */
@@ -77,6 +92,17 @@ public class AnthropicApiException(
 ) : RuntimeException("anthropic request error: status $statusCode")
 
 /**
+ * Thrown when a completion carries a [Role.TOOL] message. Anthropic represents tool results as
+ * `tool_result` content blocks that must reference, by id, the `tool_use` block they answer — data the
+ * shared [com.primandproper.platform.llm.Message] model (a flat [Role] + `content` string) does not
+ * carry. Rather than emit an invalid `role: "tool"` into `messages[]` (which Anthropic rejects with
+ * HTTP 400), the provider fails fast here with the offending [role] attached for diagnostics.
+ */
+public class UnsupportedRoleException(
+    public val role: Role,
+) : IllegalArgumentException("anthropic messages[] does not support role: ${role.value}")
+
+/**
  * An Anthropic-backed [LlmProvider] — the port of platform-go's `anthropic` provider, reimplemented
  * over the repo's [HttpClient] contract instead of an Anthropic SDK.
  *
@@ -84,10 +110,18 @@ public class AnthropicApiException(
  * else [AnthropicModels.DEFAULT] — the same double fallback Go performs), records the model and
  * message count on both pillars, then runs the request under the injected [CircuitBreaker]. The
  * request is a JSON `POST <baseUrl>/v1/messages` carrying the `x-api-key` and `anthropic-version`
- * headers and a `{model, max_tokens, messages:[{role,content}]}` body; a non-2xx status throws
+ * headers and a `{model, max_tokens, system?, messages:[{role,content}]}` body — `Role.SYSTEM`
+ * messages are hoisted into the top-level `system` field, only `user`/`assistant` remain in
+ * `messages[]`, and a `Role.TOOL` message throws [UnsupportedRoleException]; a non-2xx status throws
  * [AnthropicApiException]. On success the `text` content blocks are concatenated into the
  * [CompletionResult], and the reported token total (`llm.tokens.total`) and stop reason
- * (`llm.finish_reason`) are recorded on the span.
+ * (`llm.finish_reason`) are recorded on the span, and both are also surfaced to the caller on the
+ * returned [CompletionResult] (`usage`/`finishReason`).
+ *
+ * Streaming: this backend does not yet consume Anthropic's SSE stream, so it inherits
+ * [LlmProvider.stream]'s default — one terminal chunk carrying the whole [complete] reply plus its
+ * usage/finish-reason. Wiring `stream: true` and parsing `text/event-stream` is a `TODO(streaming)`
+ * seam once the [HttpClient] contract exposes a streaming response body.
  *
  * SECURITY: the API key is sent only as the `x-api-key` request header — which the httpclient span
  * integration redacts before recording — and is never attached as a span attribute or logged. No
@@ -119,16 +153,38 @@ public class AnthropicLlmProvider internal constructor(
 ) : LlmProvider {
     override suspend fun complete(params: CompletionParams): CompletionResult =
         o11y.span("Completion") {
-            val model = params.model.ifBlank { defaultModel }.ifBlank { AnthropicModels.DEFAULT }
+            val model = params.model.orEmpty().ifBlank { defaultModel }.ifBlank { AnthropicModels.DEFAULT }
             set(LlmKeys.MODEL, model)
             set(LlmKeys.MESSAGE_COUNT, params.messages.size)
+
+            // Anthropic's Messages API only accepts `user`/`assistant` in messages[]. `Role.SYSTEM`
+            // prompts are hoisted into the top-level `system` field (multiple joined with newlines,
+            // Anthropic's single-string system form), and `Role.TOOL` is rejected: the shared Message
+            // model carries only flat content with no tool_use_id to build a `tool_result` block, so a
+            // fast, explicit failure beats silently sending an invalid role and taking a 400. This runs
+            // before the breaker so a malformed request isn't counted as a breaker failure.
+            val systemPrompt =
+                params.messages
+                    .filter { it.role == Role.SYSTEM }
+                    .joinToString("\n") { it.content }
+                    .ifEmpty { null }
+
+            val apiMessages =
+                params.messages.mapNotNull { message ->
+                    when (message.role) {
+                        Role.SYSTEM -> null // hoisted into `system`
+                        Role.TOOL -> throw UnsupportedRoleException(message.role)
+                        Role.USER, Role.ASSISTANT -> ApiMessage(message.role.value, message.content)
+                    }
+                }
 
             circuitBreaker.execute {
                 val payload =
                     MessagesRequest(
                         model = model,
                         maxTokens = maxTokens,
-                        messages = params.messages.map { ApiMessage(it.role.value, it.content) },
+                        messages = apiMessages,
+                        system = systemPrompt,
                     )
 
                 val request =
@@ -145,11 +201,14 @@ public class AnthropicLlmProvider internal constructor(
                 if (!response.isSuccessful) throw AnthropicApiException(response.statusCode)
 
                 val parsed = json.decodeFromString(MessagesResponse.serializer(), response.bodyAsText())
-                parsed.usage?.let { set(LlmKeys.TOTAL_TOKENS, it.inputTokens + it.outputTokens) }
+                val usage = parsed.usage?.let { TokenUsage(inputTokens = it.inputTokens, outputTokens = it.outputTokens) }
+                usage?.let { set(LlmKeys.TOTAL_TOKENS, it.totalTokens) }
                 parsed.stopReason?.let { set(LlmKeys.FINISH_REASON, it) }
 
                 CompletionResult(
                     content = parsed.content.filter { it.type == "text" }.joinToString("") { it.text },
+                    usage = usage,
+                    finishReason = parsed.stopReason,
                 )
             }
         }
@@ -176,15 +235,15 @@ public fun AnthropicLlmProvider(
     baseUrl: String = AnthropicConfig.DEFAULT_BASE_URL,
     defaultModel: String = AnthropicModels.DEFAULT,
     maxTokens: Int = AnthropicConfig.DEFAULT_MAX_TOKENS,
-    logger: Logger? = null,
-    tracerProvider: TracerProvider? = null,
-    circuitBreaker: CircuitBreaker? = null,
+    logger: Logger = NoopLogger,
+    tracerProvider: TracerProvider = NoopTracerProvider,
+    circuitBreaker: CircuitBreaker = NoopCircuitBreaker,
 ): AnthropicLlmProvider {
     if (apiKey.isEmpty()) throw EmptyApiKeyException()
     return AnthropicLlmProvider(
         o11y = Observer(NAME, logger, tracerProvider),
         httpClient = httpClient,
-        circuitBreaker = ensureCircuitBreaker(circuitBreaker),
+        circuitBreaker = circuitBreaker,
         apiKey = apiKey,
         messagesUrl = baseUrl.trimEnd('/') + "/v1/messages",
         defaultModel = defaultModel,
@@ -196,9 +255,9 @@ public fun AnthropicLlmProvider(
 public fun AnthropicLlmProvider(
     config: AnthropicConfig,
     httpClient: HttpClient,
-    logger: Logger? = null,
-    tracerProvider: TracerProvider? = null,
-    circuitBreaker: CircuitBreaker? = null,
+    logger: Logger = NoopLogger,
+    tracerProvider: TracerProvider = NoopTracerProvider,
+    circuitBreaker: CircuitBreaker = NoopCircuitBreaker,
 ): AnthropicLlmProvider {
     config.validate()
     return AnthropicLlmProvider(

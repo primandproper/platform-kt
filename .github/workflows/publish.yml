@@ -1,0 +1,73 @@
+# Tag-triggered release publish. Pushing a `v*` tag (e.g. `v0.2.0`) publishes EVERY module — the
+# pure-JVM modules AND the ten Android `.aar` modules — to this repo's GitHub Packages Maven registry
+# at the tag's version. This is P1-7's recommended path (option B): it reuses the exact Android SDK
+# provisioning the CI job already proves out and leaves JitPack's JVM-only flow (jitpack.yml)
+# completely untouched, so a failure here can never regress the reliable JVM publish.
+#
+# Consumers add the GitHub Packages repository (authenticated) and depend on
+# `com.github.primandproper.platform-kt:<module>:<tag>` — see README → "Android modules".
+name: Publish
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (without the leading v), e.g. 0.2.0"
+        required: true
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: publish to GitHub Packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # Matches the mise-pinned toolchain (java = "temurin-17").
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # The Android modules are part of this (non-jvmOnly) build, so the SDK + accepted licenses are
+      # required — identical to ci.yml's setup.
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Derive the publish version from the tag (strip the leading `v`), or from the manual dispatch
+      # input.
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "value=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Publishes all modules (NOT -PjvmOnly, so the Android .aar modules are included) to the
+      # GitHubPackages repository configured in build.gradle.kts. GITHUB_ACTOR/GITHUB_TOKEN are what
+      # gate that repository on.
+      - name: Publish
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          ./gradlew publishAllPublicationsToGitHubPackagesRepository
+          -PpublishVersion=${{ steps.version.outputs.value }}
+          --no-configuration-cache

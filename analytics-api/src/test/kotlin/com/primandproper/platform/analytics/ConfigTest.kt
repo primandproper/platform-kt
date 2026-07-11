@@ -2,6 +2,7 @@ package com.primandproper.platform.analytics
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -10,27 +11,29 @@ import kotlin.test.assertTrue
 class ConfigTest {
     @Test
     fun `valid segment source passes validation`() {
-        val cfg = SourceConfig(provider = Provider.SEGMENT, segment = SegmentConfig(apiToken = "token"))
-        assertNull(cfg.validate())
-        assertTrue(cfg.isValid)
+        SourceConfig(provider = AnalyticsProvider.SEGMENT, segment = SegmentConfig(apiToken = "token")).validate()
     }
 
     @Test
     fun `segment provider without token fails validation`() {
-        val cfg = SourceConfig(provider = Provider.SEGMENT)
-        assertTrue(cfg.validate() != null)
+        assertFailsWith<InvalidAnalyticsSourceConfigException> {
+            SourceConfig(provider = AnalyticsProvider.SEGMENT).validate()
+        }
     }
 
     @Test
     fun `posthog provider without key fails validation`() {
-        val cfg = SourceConfig(provider = Provider.POSTHOG)
-        assertTrue(cfg.validate() != null)
+        assertFailsWith<InvalidAnalyticsSourceConfigException> {
+            SourceConfig(provider = AnalyticsProvider.POSTHOG).validate()
+        }
     }
 
     @Test
-    fun `unknown provider fails validation`() {
-        assertTrue(SourceConfig(provider = "bogus").validate() != null)
-        assertTrue(SourceConfig(provider = "").validate() != null)
+    fun `fromValue resolves known providers and returns null for unknown or blank`() {
+        assertEquals(AnalyticsProvider.SEGMENT, AnalyticsProvider.fromValue("  SEGMENT "))
+        assertEquals(AnalyticsProvider.POSTHOG, AnalyticsProvider.fromValue("posthog"))
+        assertNull(AnalyticsProvider.fromValue("bogus"))
+        assertNull(AnalyticsProvider.fromValue(""))
     }
 
     @Test
@@ -40,7 +43,7 @@ class ConfigTest {
 
     @Test
     fun `toMap with only ios`() {
-        val ios = SourceConfig(provider = Provider.SEGMENT)
+        val ios = SourceConfig(provider = AnalyticsProvider.SEGMENT)
         val m = ProxySourcesConfig(ios = ios).toMap()
         assertEquals(1, m.size)
         assertSame(ios, m["ios"])
@@ -48,8 +51,8 @@ class ConfigTest {
 
     @Test
     fun `toMap with both sources`() {
-        val ios = SourceConfig(provider = Provider.SEGMENT)
-        val web = SourceConfig(provider = Provider.POSTHOG)
+        val ios = SourceConfig(provider = AnalyticsProvider.SEGMENT)
+        val web = SourceConfig(provider = AnalyticsProvider.POSTHOG)
         val m = ProxySourcesConfig(ios = ios, web = web).toMap()
         assertEquals(2, m.size)
         assertSame(ios, m["ios"])

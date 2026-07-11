@@ -1,6 +1,8 @@
 package com.primandproper.platform.secrets.env
 
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.Observer
 import com.primandproper.platform.observability.TracerProvider
 import com.primandproper.platform.observability.span
@@ -30,8 +32,8 @@ public class EnvSecretSource internal constructor(
      * @param lookup the environment reader; defaults to [System.getenv]. Overridable for tests.
      */
     public constructor(
-        logger: Logger? = null,
-        tracerProvider: TracerProvider? = null,
+        logger: Logger = NoopLogger,
+        tracerProvider: TracerProvider = NoopTracerProvider,
         lookup: (String) -> String? = { System.getenv(it) },
     ) : this(Observer(NAME, logger, tracerProvider), lookup)
 
@@ -45,7 +47,7 @@ public class EnvSecretSource internal constructor(
             )
         }
 
-    override fun close() {
+    override suspend fun close() {
         o11y.logger.debug("closing env secret source")
     }
 

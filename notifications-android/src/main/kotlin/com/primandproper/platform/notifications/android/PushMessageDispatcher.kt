@@ -2,6 +2,8 @@ package com.primandproper.platform.notifications.android
 
 import com.primandproper.platform.notifications.NotificationKeys
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.Observer
 import com.primandproper.platform.observability.TracerProvider
 import com.primandproper.platform.observability.span
@@ -20,7 +22,14 @@ internal const val NAME: String = "push_message_dispatcher"
  * not called, so a junk push can never crash the app or reach handler code with a fabricated message.
  *
  * Kept off any Firebase type so the whole dispatch flow is unit-testable on the JVM; the service seam
- * is the only piece that touches `RemoteMessage`.
+ * ([PlatformFirebaseMessagingService]) is the only piece that touches `RemoteMessage`.
+ *
+ * The `FirebaseMessagingService` seam is wired: [PlatformFirebaseMessagingService] (a `Service`, hence
+ * itself a `Context`) constructs a [PushMessageDispatcher] from the app-registered [PushMessageHandler]
+ * (see [PlatformFirebaseMessaging]), converts `RemoteMessage` into a [RawPushPayload] (`data` map +
+ * `notification` title/body + `messageId`), and calls [dispatch] from `onMessageReceived` /
+ * [dispatchToken] from `onNewToken`. No Context is needed on this dispatcher itself; the Context
+ * arrives with the service subclass.
  */
 public class PushMessageDispatcher internal constructor(
     private val o11y: Observer,
@@ -33,8 +42,8 @@ public class PushMessageDispatcher internal constructor(
      */
     public constructor(
         handler: PushMessageHandler,
-        logger: Logger? = null,
-        tracerProvider: TracerProvider? = null,
+        logger: Logger = NoopLogger,
+        tracerProvider: TracerProvider = NoopTracerProvider,
     ) : this(Observer(NAME, logger, tracerProvider), handler)
 
     /**

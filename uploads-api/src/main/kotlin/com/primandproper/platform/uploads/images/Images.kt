@@ -15,15 +15,25 @@ import javax.imageio.ImageIO
  * ImageIO reader's format), never from a filename.
  */
 
-/** The image was of an unsupported type. Port of Go's `ErrInvalidImageContentType`. */
-public val ErrInvalidImageContentType: PlatformException = PlatformException("invalid image content type")
+/**
+ * Thrown when the image is of an unsupported type. Port of Go's `ErrInvalidImageContentType`.
+ * [detail] appends context after the base message (the shape Go's wrapped errors produced).
+ */
+public class InvalidImageContentTypeException(
+    detail: String? = null,
+) : PlatformException("invalid image content type" + if (detail != null) ": $detail" else "")
 
-/** A zero width or height was requested for a thumbnail. Port of Go's `ErrInvalidThumbnailDimensions`. */
-public val ErrInvalidThumbnailDimensions: PlatformException =
+/** Thrown when a zero width or height was requested for a thumbnail. Port of Go's `ErrInvalidThumbnailDimensions`. */
+public class InvalidThumbnailDimensionsException :
     PlatformException("thumbnail width and height must both be greater than zero")
 
-/** The image exceeds the configured size or dimension limits. Port of Go's `ErrImageTooLarge`. */
-public val ErrImageTooLarge: PlatformException = PlatformException("image too large")
+/**
+ * Thrown when the image exceeds the configured size or dimension limits. Port of Go's `ErrImageTooLarge`.
+ * [detail] appends context after the base message (the shape Go's wrapped errors produced).
+ */
+public class ImageTooLargeException(
+    detail: String? = null,
+) : PlatformException("image too large" + if (detail != null) ": $detail" else "")
 
 /** Caps the encoded image size read into memory: 32 MiB. Port of Go's `maxImageBytes`. */
 public const val MAX_IMAGE_BYTES: Int = 32 shl 20
@@ -61,7 +71,7 @@ public class ImageContent(
         width: Int,
         height: Int,
     ): ImageContent {
-        if (width <= 0 || height <= 0) throw ErrInvalidThumbnailDimensions
+        if (width <= 0 || height <= 0) throw InvalidThumbnailDimensionsException()
         throw NotImplementedError("TODO(images): thumbnail transforms are not yet ported")
     }
 }
@@ -74,20 +84,20 @@ public class ImageContent(
  * declared dimensions are checked from the header before any pixel decode — so an oversized image is
  * rejected before it can force a large allocation, exactly as the Go port checks `DecodeConfig` first.
  *
- * @throws PlatformException [ErrImageTooLarge] when the bytes or declared dimensions exceed the limits;
- *   [ErrInvalidImageContentType] when the data is not a supported/decodable PNG, JPEG, or GIF.
+ * @throws ImageTooLargeException when the bytes or declared dimensions exceed the limits;
+ *   [InvalidImageContentTypeException] when the data is not a supported/decodable PNG, JPEG, or GIF.
  */
 public fun decodeImage(source: InputStream): ImageContent {
     val data = readLimited(source, MAX_IMAGE_BYTES + 1)
     if (data.size > MAX_IMAGE_BYTES) {
-        throw PlatformException("${ErrImageTooLarge.message}: image exceeds maximum size of $MAX_IMAGE_BYTES bytes", ErrImageTooLarge)
+        throw ImageTooLargeException("image exceeds maximum size of $MAX_IMAGE_BYTES bytes")
     }
 
     ImageIO.createImageInputStream(ByteArrayInputStream(data)).use { iis ->
-        if (iis == null) throw PlatformException("${ErrInvalidImageContentType.message}: unreadable image data", ErrInvalidImageContentType)
+        if (iis == null) throw InvalidImageContentTypeException("unreadable image data")
         val readers = ImageIO.getImageReaders(iis)
         if (!readers.hasNext()) {
-            throw PlatformException("${ErrInvalidImageContentType.message}: no decoder for image data", ErrInvalidImageContentType)
+            throw InvalidImageContentTypeException("no decoder for image data")
         }
         val reader = readers.next()
         try {
@@ -96,16 +106,15 @@ public fun decodeImage(source: InputStream): ImageContent {
             val width = reader.getWidth(reader.minIndex)
             val height = reader.getHeight(reader.minIndex)
             if (width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION) {
-                throw PlatformException(
-                    "${ErrImageTooLarge.message}: image dimensions ${width}x$height exceed maximum of $MAX_IMAGE_DIMENSION",
-                    ErrImageTooLarge,
+                throw ImageTooLargeException(
+                    "image dimensions ${width}x$height exceed maximum of $MAX_IMAGE_DIMENSION",
                 )
             }
 
             val contentType = "image/" + reader.formatName.lowercase()
             when (contentType) {
                 IMAGE_PNG, IMAGE_JPEG, IMAGE_GIF -> {}
-                else -> throw PlatformException("${ErrInvalidImageContentType.message}: $contentType", ErrInvalidImageContentType)
+                else -> throw InvalidImageContentTypeException(contentType)
             }
 
             return ImageContent(contentType = contentType, data = data)

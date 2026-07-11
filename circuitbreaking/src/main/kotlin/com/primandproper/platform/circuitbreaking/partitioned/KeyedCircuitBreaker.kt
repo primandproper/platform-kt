@@ -30,12 +30,6 @@ public fun KeyedCircuitBreaker(
     breakers: Map<String, CircuitBreaker> = emptyMap(),
 ): KeyedCircuitBreaker = DefaultKeyedCircuitBreaker(global, breakers)
 
-/**
- * Returns [breaker] if non-null, otherwise the always-closed [NoopKeyedCircuitBreaker]. The keyed
- * analog of `ensureCircuitBreaker`.
- */
-public fun ensureKeyedCircuitBreaker(breaker: KeyedCircuitBreaker?): KeyedCircuitBreaker = breaker ?: NoopKeyedCircuitBreaker
-
 internal class DefaultKeyedCircuitBreaker(
     private val global: CircuitBreaker,
     breakers: Map<String, CircuitBreaker>,

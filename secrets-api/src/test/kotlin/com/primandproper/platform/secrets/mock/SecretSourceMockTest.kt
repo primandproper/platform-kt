@@ -23,13 +23,14 @@ class SecretSourceMockTest {
         }
 
     @Test
-    fun `close records and invokes func`() {
-        var closed = false
-        val mock = SecretSourceMock(closeFunc = { closed = true })
+    fun `close records and invokes func`() =
+        runTest {
+            var closed = false
+            val mock = SecretSourceMock(closeFunc = { closed = true })
 
-        mock.close()
+            mock.close()
 
-        assertEquals(1, mock.closeCalls)
-        assertEquals(true, closed)
-    }
+            assertEquals(1, mock.closeCalls)
+            assertEquals(true, closed)
+        }
 }

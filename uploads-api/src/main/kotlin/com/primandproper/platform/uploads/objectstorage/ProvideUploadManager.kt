@@ -1,7 +1,8 @@
 package com.primandproper.platform.uploads.objectstorage
 
-import com.primandproper.platform.errors.wrap
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.TracerProvider
 import com.primandproper.platform.uploads.Attributes
 import com.primandproper.platform.uploads.ObjectInfo
@@ -13,7 +14,7 @@ import java.io.InputStream
 
 /**
  * A [Bucket] decorator that prepends [prefix] to every path, the analog of gocloud.dev's
- * `blob.PrefixedBucket`. Applied by [newUploadManager] when [StorageConfig.bucketPrefix] is set, so
+ * `blob.PrefixedBucket`. Applied by [uploadManager] when [StorageConfig.bucketPrefix] is set, so
  * every object lives under a shared key prefix without the caller repeating it.
  */
 public class PrefixedBucket(
@@ -49,7 +50,7 @@ public class PrefixedBucket(
 
 /**
  * Wraps [bucket] in a [PrefixedBucket] when [prefix] is non-empty, else returns it unchanged. Shared by
- * [newUploadManager] and the S3 backend so prefixing behaves identically across providers.
+ * [uploadManager] and the S3 backend so prefixing behaves identically across providers.
  */
 public fun maybePrefixed(
     bucket: Bucket,
@@ -68,19 +69,19 @@ public fun maybePrefixed(
  *
  * @throws StorageConfigException when [config] is invalid (mirrors Go wrapping the validation error).
  */
-public fun newUploadManager(
+public fun uploadManager(
     config: StorageConfig,
-    logger: Logger? = null,
-    tracerProvider: TracerProvider? = null,
+    logger: Logger = NoopLogger,
+    tracerProvider: TracerProvider = NoopTracerProvider,
 ): Uploader {
     config.validate()
 
     val base: Bucket =
-        when (config.resolvedProvider()) {
+        when (config.provider) {
             StorageProvider.MEMORY -> MemoryBucket()
             StorageProvider.FILESYSTEM ->
                 FilesystemBucket(
-                    requireNotNull(config.filesystemConfig) { ErrNilConfig.message ?: "nil config provided" },
+                    requireNotNull(config.filesystemConfig) { "nil config provided" },
                 )
             StorageProvider.S3 ->
                 throw UnsupportedOperationException(
@@ -92,9 +93,6 @@ public fun newUploadManager(
                 throw UnsupportedOperationException("TODO(r2): the R2 backend is served by :uploads-s3 once wired")
             StorageProvider.BACKBLAZE_B2 ->
                 throw UnsupportedOperationException("TODO(b2): the Backblaze B2 backend is served by :uploads-s3 once wired")
-            null ->
-                // Unreachable after validate(), but keeps the wrap-and-rethrow shape faithful to Go.
-                throw (wrap(ErrUnknownProvider, config.provider) ?: ErrUnknownProvider)
         }
 
     return Uploader(maybePrefixed(base, config.bucketPrefix), config.bucketName, logger, tracerProvider)

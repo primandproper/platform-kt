@@ -9,7 +9,7 @@ class NoopRateLimiterTest {
     @Test
     fun `allow always returns true`() =
         runTest {
-            val rl = NoopRateLimiter()
+            val rl = NoopRateLimiter
             repeat(100) {
                 assertTrue(rl.allow("any"))
             }
@@ -17,6 +17,6 @@ class NoopRateLimiterTest {
 
     @Test
     fun `close is a no-op`() {
-        NoopRateLimiter().close()
+        NoopRateLimiter.close()
     }
 }

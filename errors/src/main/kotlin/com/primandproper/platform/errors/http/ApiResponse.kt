@@ -24,26 +24,36 @@ public class ApiError(
 }
 
 /**
- * Mirrors Go's `APIError.AsError()`: returns the error, or `null` for a `null` receiver. Modeled as
- * a nullable-receiver extension so `apiError.asError()` reproduces the Go nil-receiver behavior.
- */
-public fun ApiError?.asError(): Throwable? = this
-
-/**
  * A response we might send to the user, mirroring platform-go's generic `http.APIResponse[T]`.
+ *
+ * Go models this as one struct with nullable `data` and `error` fields (an untagged union where both
+ * or neither could be set). Here it is a sealed hierarchy — [Success] carries the payload, [Failure]
+ * carries the [ApiError] — so "has data XOR has error" is enforced by the type system and callers
+ * `when`-exhaust over the two cases instead of null-checking two fields.
  *
  * The Go type also carries a `*filtering.Pagination`; that lives in the not-yet-ported
  * `database/filtering` module, so it is omitted here (TODO: add once `:database` lands).
  */
-public class ApiResponse<T>(
-    public val data: T? = null,
-    public val error: ApiError? = null,
-    public val details: ResponseDetails = ResponseDetails(),
-)
+public sealed class ApiResponse<out T> {
+    /** Details common to both outcomes (trace id, current account id). */
+    public abstract val details: ResponseDetails
+
+    /** A successful response carrying [data]. */
+    public data class Success<out T>(
+        public val data: T,
+        override val details: ResponseDetails = ResponseDetails(),
+    ) : ApiResponse<T>()
+
+    /** A failed response carrying the user-facing [error]. */
+    public data class Failure(
+        public val error: ApiError,
+        override val details: ResponseDetails = ResponseDetails(),
+    ) : ApiResponse<Nothing>()
+}
 
 /** Builds an error response, mirroring Go's `NewAPIErrorResponse`. */
 public fun newApiErrorResponse(
     issue: String,
     code: ErrorCode,
     details: ResponseDetails,
-): ApiResponse<Any> = ApiResponse(error = ApiError(issue, code), details = details)
+): ApiResponse.Failure = ApiResponse.Failure(ApiError(issue, code), details)

@@ -13,32 +13,31 @@ class HttpServerConfigTest {
     @Test
     fun `port is required to be in range`() {
         assertFailsWith<IllegalArgumentException> {
-            HttpServerConfig(port = 0, startupDeadline = 1.seconds).validate()
+            HttpServerConfig(port = 0, startupDeadline = 1.seconds)
         }
         assertFailsWith<IllegalArgumentException> {
-            HttpServerConfig(port = 70_000, startupDeadline = 1.seconds).validate()
+            HttpServerConfig(port = 70_000, startupDeadline = 1.seconds)
         }
     }
 
     @Test
     fun `startup deadline is required`() {
         assertFailsWith<IllegalArgumentException> {
-            HttpServerConfig(port = 8080, startupDeadline = Duration.ZERO).validate()
+            HttpServerConfig(port = 8080, startupDeadline = Duration.ZERO)
         }
     }
 
     @Test
     fun `a fully-specified config validates`() {
-        HttpServerConfig(port = 8080, startupDeadline = 5.seconds).validate()
+        HttpServerConfig(port = 8080, startupDeadline = 5.seconds)
     }
 
     @Test
-    fun `ensureDefaults fills zero timeouts`() {
+    fun `unset timeouts resolve to their defaults`() {
         val cfg = HttpServerConfig(port = 8080, startupDeadline = 5.seconds)
-        cfg.ensureDefaults()
-        assertEquals(DEFAULT_READ_TIMEOUT, cfg.readTimeout)
-        assertEquals(DEFAULT_WRITE_TIMEOUT, cfg.writeTimeout)
-        assertEquals(DEFAULT_IDLE_TIMEOUT, cfg.idleTimeout)
+        assertEquals(DEFAULT_READ_TIMEOUT, cfg.readTimeout())
+        assertEquals(DEFAULT_WRITE_TIMEOUT, cfg.writeTimeout())
+        assertEquals(DEFAULT_IDLE_TIMEOUT, cfg.idleTimeout())
     }
 
     @Test
@@ -47,10 +46,9 @@ class HttpServerConfigTest {
     }
 
     @Test
-    fun `ensureDefaults preserves explicit timeouts`() {
+    fun `an explicit timeout is preserved`() {
         val cfg = HttpServerConfig(port = 8080, startupDeadline = 5.seconds, readTimeout = 3.seconds)
-        cfg.ensureDefaults()
-        assertEquals(3.seconds, cfg.readTimeout)
+        assertEquals(3.seconds, cfg.readTimeout())
     }
 
     @Test

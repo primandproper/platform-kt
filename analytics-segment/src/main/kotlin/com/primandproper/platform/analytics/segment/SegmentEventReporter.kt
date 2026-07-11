@@ -2,16 +2,21 @@ package com.primandproper.platform.analytics.segment
 
 import com.primandproper.platform.analytics.EventReporter
 import com.primandproper.platform.circuitbreaking.CircuitBreaker
-import com.primandproper.platform.circuitbreaking.ensureCircuitBreaker
+import com.primandproper.platform.circuitbreaking.NoopCircuitBreaker
 import com.primandproper.platform.observability.Keys
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.Observer
 import com.primandproper.platform.observability.TracerProvider
 import com.primandproper.platform.observability.span
 import com.segment.analytics.Analytics
+import com.segment.analytics.Callback
 import com.segment.analytics.messages.IdentifyMessage
+import com.segment.analytics.messages.Message
 import com.segment.analytics.messages.MessageBuilder
 import com.segment.analytics.messages.TrackMessage
+import kotlinx.coroutines.runBlocking
 
 /** Component name for the Segment reporter's Observer. Mirrors platform-go's `segment.name`. */
 internal const val NAME: String = "segment_event_reporter"
@@ -34,12 +39,13 @@ internal fun interface MessageEnqueuer {
  * A Segment-backed [EventReporter] — the port of platform-go's `segment.EventReporter`.
  *
  * Each method opens an Observer span, records the user/event/length on both pillars, then runs the
- * enqueue under the injected [CircuitBreaker]. In platform-go the breaker is driven from the Segment
- * client's asynchronous delivery callbacks (`breakerCallback.Success/Failure`); the coroutine-native
- * Kotlin breaker is `execute`-shaped, so this port drives it from the synchronous enqueue outcome
- * instead — an open breaker rejects with `ErrCircuitBroken` before enqueuing, and an enqueue failure
- * is counted as a breaker failure. Delivery still happens asynchronously in the SDK's background
- * flusher.
+ * enqueue under the injected [CircuitBreaker]. An open breaker rejects with `ErrCircuitBroken` before
+ * enqueuing, and a synchronous enqueue failure is counted as a breaker failure. Delivery itself
+ * happens asynchronously in the SDK's background flusher; that outcome is reported back through a
+ * [SegmentDeliveryCallback] (registered by the production factory below), mirroring how platform-go
+ * drives its breaker from the Segment client's delivery callbacks (`breakerCallback.Success/Failure`)
+ * — so a batch that fails to deliver logs an error and counts toward the breaker instead of failing
+ * forever in silence.
  *
  * TODO(metrics): platform-go increments explicit event/error `Int64Counter`s per call. Those are a
  * metrics-pillar seam here (the span already records the operation); wire counters once the
@@ -51,7 +57,7 @@ public class SegmentEventReporter internal constructor(
     private val enqueuer: MessageEnqueuer,
     private val closer: () -> Unit,
 ) : EventReporter {
-    override fun close() {
+    override suspend fun close() {
         try {
             closer()
         } catch (error: Throwable) {
@@ -103,6 +109,43 @@ public class SegmentEventReporter internal constructor(
 }
 
 /**
+ * Reports the Segment SDK's asynchronous delivery outcome back onto the breaker and logger. The
+ * synchronous enqueue in [SegmentEventReporter] only sees a message land in the SDK's in-memory queue;
+ * actual HTTP delivery happens later on the SDK's background flusher, and *that* is the outcome this
+ * callback reports — a delivered batch counts a breaker success, a failed one logs an error and counts
+ * a breaker failure, so repeated delivery failures trip the breaker rather than failing silently. Port
+ * of platform-go's `breakerCallback`.
+ *
+ * The callback fires on the SDK's network thread, off the coroutine world; the breaker's only surface
+ * is the suspend [CircuitBreaker.execute], so the outcome is bridged with [runBlocking] on that thread
+ * — a brief block on a background flusher thread, never on a caller's coroutine. Only the throwable is
+ * logged (never the message body), so no user traits or credentials reach the log.
+ */
+internal class SegmentDeliveryCallback(
+    private val logger: Logger,
+    private val circuitBreaker: CircuitBreaker,
+) : Callback {
+    override fun success(message: Message): Unit = report(null)
+
+    override fun failure(
+        message: Message,
+        throwable: Throwable,
+    ) {
+        logger.error("segment message delivery failed", throwable)
+        report(throwable)
+    }
+
+    private fun report(failure: Throwable?) {
+        try {
+            runBlocking { circuitBreaker.execute { failure?.let { throw it } } }
+        } catch (_: Throwable) {
+            // execute rethrows the delivery failure (or a rejection when the breaker is already open);
+            // the outcome is already recorded and there is nothing to propagate from a background thread.
+        }
+    }
+}
+
+/**
  * Builds a production Segment-backed [EventReporter].
  *
  * @param apiToken the Segment write key; an empty token throws [EmptyApiTokenException] (mirroring Go).
@@ -112,17 +155,25 @@ public class SegmentEventReporter internal constructor(
  */
 public fun SegmentEventReporter(
     apiToken: String,
-    logger: Logger? = null,
-    tracerProvider: TracerProvider? = null,
-    circuitBreaker: CircuitBreaker? = null,
+    logger: Logger = NoopLogger,
+    tracerProvider: TracerProvider = NoopTracerProvider,
+    circuitBreaker: CircuitBreaker = NoopCircuitBreaker,
 ): SegmentEventReporter {
     if (apiToken.isEmpty()) throw EmptyApiTokenException()
 
-    val analytics = Analytics.builder(apiToken).build()
+    val o11y = Observer(NAME, logger, tracerProvider)
+    val breaker = circuitBreaker
+
+    // Register the delivery callback so the SDK's background flush drives the breaker and logs
+    // failures, instead of the breaker seeing only the synchronous enqueue.
+    val analytics =
+        Analytics.builder(apiToken)
+            .callback(SegmentDeliveryCallback(o11y.logger, breaker))
+            .build()
 
     return SegmentEventReporter(
-        o11y = Observer(NAME, logger, tracerProvider),
-        circuitBreaker = ensureCircuitBreaker(circuitBreaker),
+        o11y = o11y,
+        circuitBreaker = breaker,
         enqueuer = MessageEnqueuer { analytics.enqueue(it) },
         closer = {
             analytics.flush()

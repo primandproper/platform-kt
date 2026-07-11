@@ -18,10 +18,12 @@ public fun interface HttpHandler {
 public typealias Middleware = (HttpHandler) -> HttpHandler
 
 /**
- * A registered HTTP route with its method and path. Direct port of Go's `routing.Route`.
+ * A registered HTTP route with its method and path. Direct port of Go's `routing.Route`. A `null`
+ * [method] denotes a route registered for *every* verb (via [Router.handle]), replacing Go's `"*"`
+ * pseudo-method string.
  */
 public data class Route(
-    public val method: String,
+    public val method: HttpMethod?,
     public val path: String,
 )
 
@@ -45,10 +47,10 @@ public interface MountableHandler
  *
  * Divergences from Go, all forced by the language rather than by design:
  * - `Handler()` returns a [MountableHandler] instead of `http.Handler` (see that type's docs).
- * - `Handle` and `HandleFunc` both take [HttpHandler] (Kotlin has no `Handler`/`HandlerFunc` split);
- *   [handleFunc] is retained for parity and simply delegates to [handle].
- * - `AddRoute` returns Go's `error`; here [addRoute] throws [IllegalArgumentException] for an unknown
- *   method, the idiomatic Kotlin equivalent of Go's `errInvalidMethod`.
+ * - `Handle` and `HandleFunc` both take [HttpHandler] (Kotlin has no `Handler`/`HandlerFunc` split),
+ *   so Go's redundant `HandleFunc` alias is dropped — [handle] is the single every-verb registration.
+ * - `AddRoute` returns Go's `error`; here [addRoute] takes a typed [HttpMethod], so the "unknown
+ *   method" error Go's `errInvalidMethod` models is prevented at compile time rather than thrown.
  * - Metrics (Go wires an otelchi metrics provider) are a documented `TODO(metrics)` seam in the
  *   provider, since observability-api has no metrics pillar yet — the same stance `:cache-api` takes.
  */
@@ -61,12 +63,6 @@ public interface Router {
 
     /** Registers [handler] at [pattern] for every HTTP method. Analog of Go's `Handle`. */
     public fun handle(
-        pattern: String,
-        handler: HttpHandler,
-    )
-
-    /** Alias of [handle], retained for parity with Go's `HandleFunc`. */
-    public fun handleFunc(
         pattern: String,
         handler: HttpHandler,
     )
@@ -125,12 +121,9 @@ public interface Router {
         handler: HttpHandler,
     )
 
-    /**
-     * Registers [handler] for [method] at [path], wrapped in [middleware]. Throws
-     * [IllegalArgumentException] if [method] is not a known HTTP verb, mirroring Go's `errInvalidMethod`.
-     */
+    /** Registers [handler] for [method] at [path], wrapped in [middleware]. */
     public fun addRoute(
-        method: String,
+        method: HttpMethod,
         path: String,
         handler: HttpHandler,
         vararg middleware: Middleware,

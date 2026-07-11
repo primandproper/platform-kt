@@ -1,38 +1,68 @@
 package com.primandproper.platform.secrets
 
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.TracerProvider
-import com.primandproper.platform.secrets.env.EnvConfig
 import com.primandproper.platform.secrets.env.EnvSecretSource
 import com.primandproper.platform.secrets.noop.NoopSecretSource
+
+/**
+ * The supported secret-source providers. Port of platform-go's `secrets/config.Provider*` constants,
+ * modelled as an enum so an unknown provider is rejected the way Go's `validation.In(...)` rejects it.
+ * [value] is the wire/string form validated against configuration.
+ *
+ * Only the two in-process backends are wired here — [ENV] (the default) and [NOOP]. The three network
+ * vendor backends from the Go source are left as documented seams (see
+ * [SecretsConfig.SecretSource]); the enum still lists them so a config naming, say, `"gcp"`
+ * resolves to a known provider even before its backend lands, matching Go's `validation.In(...)`.
+ */
+public enum class SecretProvider(
+    public val value: String,
+) {
+    /** Environment variables (the default/primary backend). */
+    ENV("env"),
+
+    /** The no-op backend. */
+    NOOP("noop"),
+
+    /** GCP Secret Manager (TODO seam). */
+    GCP("gcp"),
+
+    /** AWS SSM Parameter Store (TODO seam). */
+    SSM("ssm"),
+
+    /** Kubernetes secrets (TODO seam). */
+    KUBECTL("kubectl"),
+    ;
+
+    public companion object {
+        /**
+         * Resolves a provider from its string [value] (trimmed, case-insensitive), or `null` if it
+         * names no known provider — the parse edge where a raw config string becomes the typed enum.
+         * A blank value resolves to `null` here; the module's blank→[ENV] default is applied by
+         * [SecretsConfig.providerFromValue].
+         */
+        public fun fromValue(value: String): SecretProvider? {
+            val normalized = value.trim().lowercase()
+            return entries.firstOrNull { it.value == normalized }
+        }
+    }
+}
 
 /**
  * Selects and builds a [SecretSource] from configuration. Port of platform-go's
  * `secrets/config.Config` + `ProvideSecretSource`.
  *
- * Only the two in-process backends are wired here — [PROVIDER_ENV] (the default) and [PROVIDER_NOOP].
- * The three network vendor backends from the Go source are left as documented seams (see
- * [provideSecretSource]); calling into one throws [NotImplementedError] rather than silently falling
- * back, so a misconfiguration is loud.
+ * [provider] is a typed [SecretProvider], resolved from its string form once at the parse edge
+ * ([SecretsConfig.providerFromValue] / [SecretProvider.fromValue]); the default is [SecretProvider.ENV],
+ * preserving Go's "blank provider means env" behavior. [SecretSource] therefore dispatches over
+ * an exhaustive `when` with no unknown arm.
  */
 public class SecretsConfig(
-    /** One of the `Provider*` constants; blank is treated as [PROVIDER_ENV]. */
-    public val provider: String = PROVIDER_ENV,
-    /** Configuration for the [PROVIDER_ENV] backend. */
-    public val env: EnvConfig? = null,
+    /** The selected backend; defaults to [SecretProvider.ENV]. */
+    public val provider: SecretProvider = SecretProvider.ENV,
 ) {
-    /**
-     * Validates provider selection, mirroring the Go `ValidateWithContext` `In(...)` check.
-     *
-     * @throws IllegalArgumentException if [provider] is not one of the known providers.
-     */
-    public fun validate() {
-        val normalized = provider.trim().lowercase()
-        require(normalized in VALID_PROVIDERS) {
-            "unknown secret source provider: \"$provider\""
-        }
-    }
-
     /**
      * Returns the configured [SecretSource].
      *
@@ -44,38 +74,35 @@ public class SecretsConfig(
      *   `k8s.io/client-go` (`SecretGetter.Get`).
      *
      * @throws NotImplementedError for the un-ported vendor providers.
-     * @throws IllegalArgumentException for an unknown provider.
      */
-    public fun provideSecretSource(
-        logger: Logger? = null,
-        tracerProvider: TracerProvider? = null,
+    public fun SecretSource(
+        logger: Logger = NoopLogger,
+        tracerProvider: TracerProvider = NoopTracerProvider,
     ): SecretSource =
-        when (provider.trim().lowercase()) {
-            "", PROVIDER_ENV -> EnvSecretSource(logger, tracerProvider)
-            PROVIDER_NOOP -> NoopSecretSource
-            PROVIDER_GCP -> throw NotImplementedError("TODO(gcp): GCP Secret Manager backend not ported; see SecretsConfig KDoc")
-            PROVIDER_SSM -> throw NotImplementedError("TODO(ssm): AWS SSM Parameter Store backend not ported; see SecretsConfig KDoc")
-            PROVIDER_KUBECTL -> throw NotImplementedError("TODO(kubectl): Kubernetes secrets backend not ported; see SecretsConfig KDoc")
-            else -> throw IllegalArgumentException("unknown secret source provider: \"$provider\"")
+        when (provider) {
+            SecretProvider.ENV -> EnvSecretSource(logger, tracerProvider)
+            SecretProvider.NOOP -> NoopSecretSource
+            SecretProvider.GCP -> throw NotImplementedError("TODO(gcp): GCP Secret Manager backend not ported; see SecretsConfig KDoc")
+            SecretProvider.SSM -> throw NotImplementedError("TODO(ssm): AWS SSM Parameter Store backend not ported; see SecretsConfig KDoc")
+            SecretProvider.KUBECTL -> throw NotImplementedError(
+                "TODO(kubectl): Kubernetes secrets backend not ported; see SecretsConfig KDoc",
+            )
         }
 
     public companion object {
-        /** Environment variables (the default/primary backend). */
-        public const val PROVIDER_ENV: String = "env"
-
-        /** The no-op backend. */
-        public const val PROVIDER_NOOP: String = "noop"
-
-        /** GCP Secret Manager (TODO seam). */
-        public const val PROVIDER_GCP: String = "gcp"
-
-        /** AWS SSM Parameter Store (TODO seam). */
-        public const val PROVIDER_SSM: String = "ssm"
-
-        /** Kubernetes secrets (TODO seam). */
-        public const val PROVIDER_KUBECTL: String = "kubectl"
-
-        private val VALID_PROVIDERS =
-            setOf(PROVIDER_ENV, PROVIDER_NOOP, PROVIDER_GCP, PROVIDER_SSM, PROVIDER_KUBECTL, "")
+        /**
+         * The parse edge: resolves a raw provider string (e.g. from an env var) to a [SecretProvider],
+         * treating a blank value as [SecretProvider.ENV] (the default backend) and rejecting an unknown
+         * name loudly rather than silently degrading. Mirrors Go's `ValidateWithContext` `In(...)` check.
+         *
+         * @throws IllegalArgumentException for a non-blank unknown provider.
+         */
+        public fun providerFromValue(value: String): SecretProvider =
+            if (value.isBlank()) {
+                SecretProvider.ENV
+            } else {
+                SecretProvider.fromValue(value)
+                    ?: throw IllegalArgumentException("unknown secret source provider: \"$value\"")
+            }
     }
 }

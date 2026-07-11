@@ -38,29 +38,49 @@ public interface PaymentManager {
 }
 
 /**
+ * An ISO 4217 currency code (e.g. `usd`, `eur`). A typed wrapper over the 3-letter code so a payment
+ * amount cannot be paired with an arbitrary or malformed currency string; the code is validated at
+ * construction. Kept lowercase-friendly because that is what the payment providers' wire APIs expect.
+ */
+@JvmInline
+public value class Currency(public val code: String) {
+    init {
+        require(code.length == 3 && code.all { it in 'a'..'z' || it in 'A'..'Z' }) {
+            "currency must be a 3-letter ISO 4217 code, got \"$code\""
+        }
+    }
+
+    public companion object {
+        public val USD: Currency = Currency("usd")
+        public val EUR: Currency = Currency("eur")
+        public val GBP: Currency = Currency("gbp")
+    }
+}
+
+/**
  * Describes a customer to create. Port of platform-go's `capitalism.CustomerCreationInput`. All fields
- * are optional except where a provider requires them; [idempotencyKey], when non-blank, makes the
+ * are optional except where a provider requires them; [idempotencyKey], when non-null, makes the
  * create safely retryable.
  */
 public data class CustomerCreationInput(
     val email: String = "",
     val name: String = "",
     val metadata: Map<String, String> = emptyMap(),
-    val idempotencyKey: String = "",
+    val idempotencyKey: String? = null,
 )
 
 /**
  * Describes a payment to initiate. Port of platform-go's `capitalism.PaymentIntentCreationInput`.
  * [amount] is in the smallest unit of [currency] (e.g. cents for USD); [idempotencyKey], when
- * non-blank, makes the create safely retryable.
+ * non-null, makes the create safely retryable.
  */
 public data class PaymentIntentCreationInput(
     val amount: Long,
-    val currency: String,
+    val currency: Currency,
     val customerID: String = "",
     val description: String = "",
     val metadata: Map<String, String> = emptyMap(),
-    val idempotencyKey: String = "",
+    val idempotencyKey: String? = null,
 )
 
 /**
@@ -74,12 +94,12 @@ public data class PaymentIntent(
 
 /**
  * Describes a subscription to create: a customer subscribed to a single price. Port of platform-go's
- * `capitalism.SubscriptionCreationInput`. [idempotencyKey], when non-blank, makes the create safely
+ * `capitalism.SubscriptionCreationInput`. [idempotencyKey], when non-null, makes the create safely
  * retryable.
  */
 public data class SubscriptionCreationInput(
     val customerID: String,
     val priceID: String,
     val metadata: Map<String, String> = emptyMap(),
-    val idempotencyKey: String = "",
+    val idempotencyKey: String? = null,
 )

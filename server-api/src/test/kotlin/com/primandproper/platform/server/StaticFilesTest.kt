@@ -1,5 +1,6 @@
 package com.primandproper.platform.server
 
+import com.primandproper.platform.routing.HttpMethod
 import com.primandproper.platform.routing.RoutingCall
 import kotlinx.coroutines.test.runTest
 import java.io.File
@@ -14,7 +15,7 @@ private class RecordingCall(
     var status: Int? = null
     var body: ByteArray? = null
 
-    override val method: String = "GET"
+    override val method: HttpMethod = HttpMethod.GET
     override val requestId: String? = null
 
     override fun pathParameter(key: String): String? = null

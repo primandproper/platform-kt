@@ -1,5 +1,6 @@
 package com.primandproper.platform.cache.redis
 
+import com.primandproper.platform.cache.CacheCodec
 import com.primandproper.platform.cache.StringCacheCodec
 import com.primandproper.platform.circuitbreaking.CircuitBreaker
 import com.primandproper.platform.circuitbreaking.CircuitState
@@ -165,5 +166,53 @@ class RedisCacheTest {
             assertNull(cache(breaker = breaker).get("absent"))
             assertEquals(1, breaker.successCount)
             assertEquals(0, breaker.failureCount)
+        }
+
+    @Test
+    fun `GetMany decode failure is not counted as a breaker failure`() =
+        runTest {
+            // A codec that blows up on one stored value — the batch's transport still succeeded.
+            val codec =
+                object : CacheCodec<String> {
+                    override fun encode(value: String): String = value
+
+                    override fun decode(encoded: String): String =
+                        if (encoded == "boom") throw RuntimeException("corrupt value") else encoded
+                }
+            val client = FakeRedisClient()
+            client.store["good"] = "ok"
+            client.store["bad"] = "boom"
+            val breaker = RecordingCircuitBreaker()
+            val c = RedisCache(client, codec, 1.hours, false, circuitBreaker = breaker)
+
+            // Decode runs OUTSIDE the breaker, so the corrupt value surfaces as a caller error...
+            assertFailsWith<RuntimeException> { c.getMany(listOf("good", "bad")) }
+            // ...and the healthy transport call is a breaker success, not a spurious failure.
+            assertEquals(1, breaker.successCount)
+            assertEquals(0, breaker.failureCount)
+        }
+
+    @Test
+    fun `open circuit flags the span as degraded`() =
+        runTest {
+            val obs = RecordingObserver()
+            val c = cache(observer = obs, breaker = RecordingCircuitBreaker(reject = true))
+
+            assertNull(c.get("k"))
+
+            val getOp = obs.operations.last { it.name == "Get" }
+            assertEquals(true, getOp.values["cache.degraded"])
+        }
+
+    @Test
+    fun `a closed-breaker miss is not flagged as degraded`() =
+        runTest {
+            val obs = RecordingObserver()
+            val c = cache(observer = obs)
+
+            assertNull(c.get("absent"))
+
+            val getOp = obs.operations.last { it.name == "Get" }
+            assertNull(getOp.values["cache.degraded"])
         }
 }

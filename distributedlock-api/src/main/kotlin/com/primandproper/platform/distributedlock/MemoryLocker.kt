@@ -2,11 +2,15 @@ package com.primandproper.platform.distributedlock
 
 import com.primandproper.platform.identifiers.newUlid
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.Observer
 import com.primandproper.platform.observability.TracerProvider
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.time.Duration
+import kotlin.time.TimeMark
+import kotlin.time.TimeSource
 
 /**
  * A single-process [Locker] backed by an in-memory map. Port of platform-go's `memory.locker`.
@@ -21,12 +25,14 @@ import kotlin.time.Duration
  * provider; there is no metrics pillar in platform-kt's observability-api, so those are a documented
  * `TODO(metrics)` seam here (the same descope `:cache-api` and `:circuitbreaking` make).
  *
- * The wall clock is injectable ([now], epoch millis) so lease-expiry behavior is deterministic in
- * tests without real sleeps — the Kotlin analog of faking `time.Now()`.
+ * Elapsed time is measured off an injected [kotlin.time.TimeSource] ([timeSource],
+ * [TimeSource.Monotonic] in production) so lease-expiry behavior is deterministic in tests without real
+ * sleeps. Lease expiry only needs *elapsed* time (a per-lock TTL), never wall-clock, so a monotonic
+ * source is the right base — the same modeling `:circuitbreaking` uses for its reset deadline.
  */
 public class MemoryLocker internal constructor(
     private val o11y: Observer,
-    private val now: () -> Long,
+    private val timeSource: TimeSource = TimeSource.Monotonic,
 ) : Locker {
     /**
      * @param logger optional root logger; defaults to a noop logger, matching platform-go's
@@ -34,13 +40,13 @@ public class MemoryLocker internal constructor(
      * @param tracerProvider optional tracer provider; defaults to noop tracing.
      */
     public constructor(
-        logger: Logger? = null,
-        tracerProvider: TracerProvider? = null,
-    ) : this(Observer(NAME, logger, tracerProvider), System::currentTimeMillis)
+        logger: Logger = NoopLogger,
+        tracerProvider: TracerProvider = NoopTracerProvider,
+    ) : this(Observer(NAME, logger, tracerProvider), TimeSource.Monotonic)
 
-    // The current owner of a key: the ownership token and the epoch-millis instant it expires at.
+    // The current owner of a key: the ownership token and the [TimeMark] deadline its lease expires at.
     internal class Held(
-        var expires: Long,
+        var expires: TimeMark,
         val token: String,
     )
 
@@ -58,23 +64,22 @@ public class MemoryLocker internal constructor(
         return try {
             op.set("lock.key", key).set("lock.ttl", ttl)
 
-            if (key.isEmpty()) throw ErrEmptyKey
-            if (!ttl.isPositive()) throw ErrInvalidTTL
+            if (key.isEmpty()) throw EmptyKeyException()
+            if (!ttl.isPositive()) throw InvalidTtlException()
 
             mutex.withLock {
                 // Opportunistically sweep entries whose TTL has elapsed. Per-key expiry below only
                 // reclaims a key that is acquired again; without this sweep, keys acquired once and
                 // never re-acquired would accumulate for the life of the process.
-                val nowMillis = now()
-                held.entries.removeAll { nowMillis > it.value.expires }
+                held.entries.removeAll { it.value.expires.hasPassedNow() }
 
                 val existing = held[key]
-                if (existing != null && now() < existing.expires) {
-                    throw ErrLockNotAcquired
+                if (existing != null && existing.expires.hasNotPassedNow()) {
+                    throw LockNotAcquiredException()
                 }
 
                 val token = newUlid()
-                held[key] = Held(expires = now() + ttl.inWholeMilliseconds, token = token)
+                held[key] = Held(expires = timeSource.markNow() + ttl, token = token)
                 MemoryLock(this, key, token, ttl)
             }
         } finally {
@@ -87,7 +92,7 @@ public class MemoryLocker internal constructor(
     }
 
     /**
-     * Drops all currently held locks. After [close], outstanding handles see [ErrLockNotHeld] on
+     * Drops all currently held locks. After [close], outstanding handles see [LockNotHeldException] on
      * release/refresh.
      */
     override suspend fun close() {
@@ -102,8 +107,8 @@ public class MemoryLocker internal constructor(
     ) {
         mutex.withLock {
             val current = held[key]
-            if (current == null || current.token != token || now() > current.expires) {
-                throw ErrLockNotHeld
+            if (current == null || current.token != token || current.expires.hasPassedNow()) {
+                throw LockNotHeldException()
             }
             held.remove(key)
         }
@@ -116,13 +121,13 @@ public class MemoryLocker internal constructor(
         token: String,
         ttl: Duration,
     ) {
-        if (!ttl.isPositive()) throw ErrInvalidTTL
+        if (!ttl.isPositive()) throw InvalidTtlException()
         mutex.withLock {
             val current = held[key]
-            if (current == null || current.token != token || now() > current.expires) {
-                throw ErrLockNotHeld
+            if (current == null || current.token != token || current.expires.hasPassedNow()) {
+                throw LockNotHeldException()
             }
-            current.expires = now() + ttl.inWholeMilliseconds
+            current.expires = timeSource.markNow() + ttl
         }
     }
 

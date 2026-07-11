@@ -44,7 +44,7 @@ public class OkHttpHttpClient internal constructor(
 
     private suspend fun executeOnce(request: HttpRequest): HttpResponse {
         // Captured on the coroutine thread, where the observability span is the current OTel context.
-        if (config.enableTracing) Span.current().recordHttpRequest(request)
+        if (config.enableTracing == true) Span.current().recordHttpRequest(request)
 
         val response =
             suspendCancellableCoroutine { continuation ->
@@ -63,18 +63,28 @@ public class OkHttpHttpClient internal constructor(
                             call: Call,
                             response: Response,
                         ) {
-                            val mapped = response.use { it.toHttpResponse() }
+                            // Reading the body can throw (truncated/corrupt body, or `callTimeout` firing
+                            // mid-read and cancelling the call). OkHttp has already marked the callback as
+                            // signalled by this point, so `onFailure` will never fire — resume with the
+                            // failure here so the suspended caller is never left hanging.
+                            val mapped =
+                                try {
+                                    response.use { it.toHttpResponse() }
+                                } catch (e: Throwable) {
+                                    continuation.resumeWithException(e)
+                                    return
+                                }
                             continuation.resume(mapped)
                         }
                     },
                 )
             }
 
-        if (config.enableTracing) Span.current().recordHttpResponse(response)
+        if (config.enableTracing == true) Span.current().recordHttpResponse(response)
         return response
     }
 
-    override fun close() {
+    override suspend fun close() {
         underlying.dispatcher.executorService.shutdown()
         underlying.connectionPool.evictAll()
     }
@@ -83,35 +93,38 @@ public class OkHttpHttpClient internal constructor(
         private const val KEEP_ALIVE_MINUTES = 5L
 
         /**
-         * Builds an OkHttp-backed client from [config]. Pass the [OpenTelemetry] that
-         * `:observability-otel` built (its `OtelTracerProvider` wraps an `OpenTelemetrySdk`, which is
-         * an `OpenTelemetry`) to light up tracing; the default [OpenTelemetry.noop] degrades cleanly
-         * to untraced calls.
+         * Builds an OkHttp-backed client from [config]. Pass the platform's [OpenTelemetry] to light
+         * up tracing — the `:observability-otel` `OtelTracerProvider` exposes it via its
+         * `openTelemetry` accessor. The default [OpenTelemetry.noop] degrades cleanly to untraced
+         * calls. When [HttpClientConfig.enableTracing] is left null (the default), tracing turns on
+         * automatically for a non-noop [openTelemetry]; set it explicitly to override.
          */
         public fun create(
             config: HttpClientConfig = HttpClientConfig(),
             openTelemetry: OpenTelemetry = OpenTelemetry.noop(),
         ): OkHttpHttpClient {
-            config.ensureDefaults()
-            config.validate()
+            // [config] is already defaulted (via its null sentinels) and validated at construction.
+            // Auto-enable tracing when a real SDK is supplied, unless the caller pinned enableTracing;
+            // the resolved value is pinned onto the config the client instance carries.
+            val resolved = config.copy(enableTracing = config.enableTracing ?: (openTelemetry !== OpenTelemetry.noop()))
 
             // OkHttp pools per-address; map Go's per-host ceiling onto the pool's idle bound. There's
             // no distinct total-vs-per-host knob, so maxIdleConns is not separately honoured here.
             val client =
                 OkHttpClient.Builder()
-                    .callTimeout(config.timeout.inWholeMilliseconds, TimeUnit.MILLISECONDS)
-                    .connectTimeout(config.connectTimeout.inWholeMilliseconds, TimeUnit.MILLISECONDS)
-                    .connectionPool(ConnectionPool(config.maxIdleConnsPerHost, KEEP_ALIVE_MINUTES, TimeUnit.MINUTES))
+                    .callTimeout(resolved.timeout().inWholeMilliseconds, TimeUnit.MILLISECONDS)
+                    .connectTimeout(resolved.connectTimeout().inWholeMilliseconds, TimeUnit.MILLISECONDS)
+                    .connectionPool(ConnectionPool(resolved.maxIdleConnsPerHost, KEEP_ALIVE_MINUTES, TimeUnit.MINUTES))
                     .build()
 
             val callFactory: Call.Factory =
-                if (config.enableTracing) {
+                if (resolved.enableTracing == true) {
                     OkHttpTelemetry.builder(openTelemetry).build().newCallFactory(client)
                 } else {
                     client
                 }
 
-            return OkHttpHttpClient(callFactory, client, config)
+            return OkHttpHttpClient(callFactory, client, resolved)
         }
     }
 }

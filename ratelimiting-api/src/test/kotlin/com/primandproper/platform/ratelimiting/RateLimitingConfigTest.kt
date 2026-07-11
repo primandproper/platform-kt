@@ -26,35 +26,35 @@ class RateLimitingConfigTest {
     }
 
     @Test
-    fun `ensureDefaults fills zero fields`() {
-        val cfg = RateLimitingConfig(provider = RateLimitingProvider.MEMORY, requestsPerSec = 0.0, burstSize = 0).ensureDefaults()
+    fun `omitted fields default to the standard budget`() {
+        val cfg = RateLimitingConfig(provider = RateLimitingProvider.MEMORY)
         assertEquals(10.0, cfg.requestsPerSec)
         assertEquals(20, cfg.burstSize)
     }
 
     @Test
-    fun `ensureDefaults preserves non-zero fields`() {
-        val cfg = RateLimitingConfig(requestsPerSec = 5.0, burstSize = 10).ensureDefaults()
+    fun `explicit fields are preserved`() {
+        val cfg = RateLimitingConfig(requestsPerSec = 5.0, burstSize = 10)
         assertEquals(5.0, cfg.requestsPerSec)
         assertEquals(10, cfg.burstSize)
     }
 
     @Test
-    fun `validate accepts a non-negative budget`() {
-        RateLimitingConfig(requestsPerSec = 1.0, burstSize = 1).validate()
+    fun `construction accepts a non-negative budget`() {
+        RateLimitingConfig(requestsPerSec = 1.0, burstSize = 1)
     }
 
     @Test
-    fun `validate rejects a negative rate`() {
+    fun `construction rejects a negative rate`() {
         assertFailsWith<IllegalArgumentException> {
-            RateLimitingConfig(requestsPerSec = -1.0, burstSize = 1).validate()
+            RateLimitingConfig(requestsPerSec = -1.0, burstSize = 1)
         }
     }
 
     @Test
-    fun `validate rejects a negative burst`() {
+    fun `construction rejects a negative burst`() {
         assertFailsWith<IllegalArgumentException> {
-            RateLimitingConfig(requestsPerSec = 1.0, burstSize = -1).validate()
+            RateLimitingConfig(requestsPerSec = 1.0, burstSize = -1)
         }
     }
 }

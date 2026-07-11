@@ -15,7 +15,7 @@ public val DEFAULT_CONN_WAIT_TIMEOUT: Duration = 5.seconds
  * @param connWaitTimeout bounds how long Acquire waits to reserve a connection from the write pool.
  *   Each held lock pins one connection for its whole lifetime, so a saturated pool would otherwise
  *   make Acquire block indefinitely. When the wait is exceeded, Acquire fails with
- *   [com.primandproper.platform.distributedlock.ErrLockNotAcquired] instead of blocking. [Duration.ZERO]
+ *   [com.primandproper.platform.distributedlock.LockNotAcquiredException] instead of blocking. [Duration.ZERO]
  *   uses [DEFAULT_CONN_WAIT_TIMEOUT]; a negative value disables the bound (wait forever). Mirrors Go's
  *   `envDefault:"5s"`.
  */

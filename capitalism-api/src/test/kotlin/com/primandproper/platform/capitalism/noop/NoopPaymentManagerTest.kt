@@ -1,5 +1,6 @@
 package com.primandproper.platform.capitalism.noop
 
+import com.primandproper.platform.capitalism.Currency
 import com.primandproper.platform.capitalism.CustomerCreationInput
 import com.primandproper.platform.capitalism.PaymentIntentCreationInput
 import com.primandproper.platform.capitalism.SubscriptionCreationInput
@@ -9,7 +10,7 @@ import kotlin.test.assertEquals
 
 /** Mirrors platform-go's `capitalism/noop.TestPaymentManager_*`. */
 class NoopPaymentManagerTest {
-    private val manager = NoopPaymentManager()
+    private val manager = NoopPaymentManager
 
     @Test
     fun `handleEventWebhook accepts and drops`() =
@@ -22,7 +23,7 @@ class NoopPaymentManagerTest {
         runTest {
             assertEquals("", manager.createCustomer(CustomerCreationInput(email = "x@y.z")))
             assertEquals("", manager.createSubscription(SubscriptionCreationInput(customerID = "c", priceID = "p")))
-            val intent = manager.createPaymentIntent(PaymentIntentCreationInput(amount = 1, currency = "usd"))
+            val intent = manager.createPaymentIntent(PaymentIntentCreationInput(amount = 1, currency = Currency("usd")))
             assertEquals("", intent.id)
             assertEquals("", intent.clientSecret)
         }

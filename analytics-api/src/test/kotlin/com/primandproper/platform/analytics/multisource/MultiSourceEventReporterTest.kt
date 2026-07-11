@@ -23,8 +23,8 @@ class MultiSourceEventReporterTest {
     }
 
     @Test
-    fun `constructor with null reporters yields empty map`() {
-        val r = MultiSourceEventReporter(null as Map<String, EventReporter>?, null, null)
+    fun `constructor with default reporters yields empty map`() {
+        val r = MultiSourceEventReporter()
         assertNotNull(r)
         assertTrue(r.reporters.isEmpty())
     }
@@ -36,20 +36,22 @@ class MultiSourceEventReporterTest {
     }
 
     @Test
-    fun `close closes every underlying reporter`() {
-        val ios = EventReporterMock(closeFunc = {})
-        val web = EventReporterMock(closeFunc = {})
-        MultiSourceEventReporter(mapOf("ios" to ios, "web" to web)).close()
-        assertEquals(1, ios.closeCalls.size)
-        assertEquals(1, web.closeCalls.size)
-    }
+    fun `close closes every underlying reporter`() =
+        runTest {
+            val ios = EventReporterMock(closeFunc = {})
+            val web = EventReporterMock(closeFunc = {})
+            MultiSourceEventReporter(mapOf("ios" to ios, "web" to web)).close()
+            assertEquals(1, ios.closeCalls)
+            assertEquals(1, web.closeCalls)
+        }
 
     @Test
-    fun `close closes a shared reporter exactly once`() {
-        val shared = EventReporterMock(closeFunc = {})
-        MultiSourceEventReporter(mapOf("ios" to shared, "web" to shared)).close()
-        assertEquals(1, shared.closeCalls.size)
-    }
+    fun `close closes a shared reporter exactly once`() =
+        runTest {
+            val shared = EventReporterMock(closeFunc = {})
+            MultiSourceEventReporter(mapOf("ios" to shared, "web" to shared)).close()
+            assertEquals(1, shared.closeCalls)
+        }
 
     @Test
     fun `getReporter returns reporter for known source`() {

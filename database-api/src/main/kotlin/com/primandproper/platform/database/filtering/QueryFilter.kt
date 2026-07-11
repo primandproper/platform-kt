@@ -1,7 +1,7 @@
 package com.primandproper.platform.database.filtering
 
 import com.primandproper.platform.observability.Logger
-import com.primandproper.platform.observability.ensureLogger
+import com.primandproper.platform.observability.NoopLogger
 import java.time.Instant
 import java.time.format.DateTimeParseException
 
@@ -111,8 +111,8 @@ public data class QueryFilter(
 public fun defaultQueryFilter(): QueryFilter = QueryFilter(maxResponseSize = DEFAULT_QUERY_FILTER_LIMIT, sortBy = SORT_ASCENDING)
 
 /** Attaches a filter's set values to [logger], returning the enriched logger. Port of `AttachToLogger`. */
-public fun QueryFilter?.attachToLogger(logger: Logger?): Logger {
-    var l = ensureLogger(logger).clone()
+public fun QueryFilter?.attachToLogger(logger: Logger = NoopLogger): Logger {
+    var l = logger.clone()
     if (this == null) {
         return l.withValue(FILTER_IS_NIL_KEY, true)
     }

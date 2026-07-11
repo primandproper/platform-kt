@@ -88,6 +88,36 @@ class UploaderTest {
         }
 
     @Test
+    fun `openRange past the end returns only the available tail`() =
+        runTest {
+            for (u in bothBackends()) {
+                u.saveBytes("k", "0123456789".toByteArray())
+                val slice = (u as RangeReader).openRange("k", 8, 100).use { it.readBytes() }
+                assertContentEquals("89".toByteArray(), slice)
+            }
+        }
+
+    @Test
+    fun `an attribute-less overwrite drops the stale sidecar on the filesystem backend`() =
+        runTest {
+            val u = filesystemUploader()
+            val attributer = u as Attributer
+            u.saveBytes(
+                "k",
+                "abc".toByteArray(),
+                SaveOptions(contentType = "text/plain", cacheControl = "max-age=60"),
+            )
+            assertEquals("text/plain", attributer.attributes("k").contentType)
+
+            // Overwrite with no attributes: the old .attrs sidecar must not linger and keep lying.
+            u.saveBytes("k", "xyz".toByteArray())
+
+            val attrs = attributer.attributes("k")
+            assertEquals(null, attrs.contentType)
+            assertEquals(null, attrs.cacheControl)
+        }
+
+    @Test
     fun `list yields objects under a prefix`() =
         runTest {
             for (u in bothBackends()) {
@@ -158,17 +188,17 @@ class UploaderTest {
         }
 
     @Test
-    fun `newUploadManager builds a working memory backend`() =
+    fun `uploadManager builds a working memory backend`() =
         runTest {
-            val u = newUploadManager(StorageConfig(bucketName = "b", provider = "memory"))
+            val u = uploadManager(StorageConfig(bucketName = "b", provider = StorageProvider.MEMORY))
             u.saveBytes("k", "v".toByteArray())
             assertTrue(u.exists("k"))
         }
 
     @Test
-    fun `newUploadManager rejects the s3 provider with a seam pointer`() {
+    fun `uploadManager rejects the s3 provider with a seam pointer`() {
         assertFailsWith<UnsupportedOperationException> {
-            newUploadManager(StorageConfig(bucketName = "b", provider = "s3"))
+            uploadManager(StorageConfig(bucketName = "b", provider = StorageProvider.S3))
         }
     }
 }

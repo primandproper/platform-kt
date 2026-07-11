@@ -1,21 +1,25 @@
 package com.primandproper.platform.distributedlock.redis
 
 import com.primandproper.platform.circuitbreaking.CircuitBreaker
-import com.primandproper.platform.circuitbreaking.ErrCircuitBroken
-import com.primandproper.platform.circuitbreaking.ensureCircuitBreaker
-import com.primandproper.platform.distributedlock.ErrEmptyKey
-import com.primandproper.platform.distributedlock.ErrInvalidTTL
-import com.primandproper.platform.distributedlock.ErrLockNotAcquired
-import com.primandproper.platform.distributedlock.ErrLockNotHeld
+import com.primandproper.platform.circuitbreaking.CircuitBrokenException
+import com.primandproper.platform.circuitbreaking.NoopCircuitBreaker
+import com.primandproper.platform.distributedlock.EmptyKeyException
+import com.primandproper.platform.distributedlock.InvalidTtlException
 import com.primandproper.platform.distributedlock.Lock
+import com.primandproper.platform.distributedlock.LockNotAcquiredException
+import com.primandproper.platform.distributedlock.LockNotHeldException
 import com.primandproper.platform.distributedlock.Locker
 import com.primandproper.platform.errors.isError
 import com.primandproper.platform.identifiers.newUlid
 import com.primandproper.platform.observability.Keys
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.Observer
 import com.primandproper.platform.observability.TracerProvider
+import com.primandproper.platform.observability.span
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * A Redis-backed [Locker]. Port of platform-go's `distributedlock/redis.locker`.
@@ -28,12 +32,12 @@ import kotlin.time.Duration
  *
  * Every method opens an [Observer] span; genuine backend failures are recorded on it via `op.error`,
  * while expected control-flow outcomes (contention, lost ownership) are returned as the
- * [ErrLockNotAcquired] / [ErrLockNotHeld] sentinels without being recorded as errors — mirroring how
+ * [LockNotAcquiredException] / [LockNotHeldException] sentinels without being recorded as errors — mirroring how
  * platform-go calls `op.Error` only on real failures.
  *
  * The [CircuitBreaker] wraps each backend round trip. platform-go drives the breaker with the
  * primitive `CannotProceed()`/`Succeeded()`/`Failed()` trio; this port folds that into
- * [CircuitBreaker.execute]: an open breaker short-circuits with [ErrCircuitBroken] before the call
+ * [CircuitBreaker.execute]: an open breaker short-circuits with [CircuitBrokenException] before the call
  * runs, a thrown backend error counts a failure, and a normal return (including the healthy
  * "contended"/"not held" replies) counts a success — so contention never trips the breaker, exactly
  * as in Go.
@@ -52,21 +56,21 @@ public class RedisLocker internal constructor(
      *   production client is built.
      * @param logger optional root logger; defaults to noop.
      * @param tracerProvider optional tracer provider; defaults to noop tracing.
-     * @param circuitBreaker optional breaker; defaults to an always-closed no-op breaker via
-     *   `ensureCircuitBreaker`, matching Go's `EnsureCircuitBreaker`.
+     * @param circuitBreaker optional breaker; defaults to the always-closed [NoopCircuitBreaker],
+     *   matching Go's `EnsureCircuitBreaker`.
      * @param client an override [RedisLockClient] (a fake in tests); when `null` a lazily-connecting
      *   [LettuceRedisLockClient] is built from [config].
      */
     public constructor(
         config: RedisLockConfig,
-        logger: Logger? = null,
-        tracerProvider: TracerProvider? = null,
-        circuitBreaker: CircuitBreaker? = null,
+        logger: Logger = NoopLogger,
+        tracerProvider: TracerProvider = NoopTracerProvider,
+        circuitBreaker: CircuitBreaker = NoopCircuitBreaker,
         client: RedisLockClient? = null,
     ) : this(
         Observer(NAME, logger, tracerProvider),
         client ?: buildLettuceClient(config),
-        ensureCircuitBreaker(circuitBreaker),
+        circuitBreaker,
         config.keyPrefix,
     )
 
@@ -78,8 +82,10 @@ public class RedisLocker internal constructor(
         try {
             op.set(Keys.NAME, key).set("lock.ttl", ttl)
 
-            if (key.isEmpty()) throw ErrEmptyKey
-            if (!ttl.isPositive()) throw ErrInvalidTTL
+            if (key.isEmpty()) throw EmptyKeyException()
+            // Reject sub-millisecond TTLs (covers zero/negative too): a positive sub-ms TTL truncates to
+            // 0 millis and would otherwise become a permanent, never-expiring lock. See the client guard.
+            if (ttl < 1.milliseconds) throw InvalidTtlException()
 
             val token = newUlid()
             val fullKey = keyPrefix + key
@@ -87,12 +93,13 @@ public class RedisLocker internal constructor(
                 try {
                     circuitBreaker.execute { client.setNx(fullKey, token, ttl.inWholeMilliseconds) }
                 } catch (t: Throwable) {
-                    if (isError(t, ErrCircuitBroken)) throw t
+                    if (isError<CircuitBrokenException>(t)) throw t
                     throw op.error(t, "acquiring lock \"$key\"")
                 }
 
+            op.set("lock.outcome", if (acquired) "acquired" else "contended")
             // Backend healthy, contention is the expected outcome — a sentinel, not a recorded error.
-            if (!acquired) throw ErrLockNotAcquired
+            if (!acquired) throw LockNotAcquiredException()
 
             return RedisLock(this, key, fullKey, token, ttl)
         } finally {
@@ -101,7 +108,7 @@ public class RedisLocker internal constructor(
     }
 
     override suspend fun ping() {
-        client.ping()
+        o11y.span("Ping") { client.ping() }
     }
 
     override suspend fun close() {
@@ -120,10 +127,10 @@ public class RedisLocker internal constructor(
                 try {
                     circuitBreaker.execute { client.eval(RELEASE_SCRIPT, listOf(fullKey), listOf(token)) }
                 } catch (t: Throwable) {
-                    if (isError(t, ErrCircuitBroken)) throw t
+                    if (isError<CircuitBrokenException>(t)) throw t
                     throw op.error(t, "releasing lock")
                 }
-            if (res == 0L) throw ErrLockNotHeld
+            if (res == 0L) throw LockNotHeldException()
         } finally {
             op.end()
         }
@@ -138,17 +145,18 @@ public class RedisLocker internal constructor(
         val op = o11y.begin("Refresh")
         try {
             op.set("lock.full_key", fullKey).set("lock.ttl", ttl)
-            if (!ttl.isPositive()) throw ErrInvalidTTL
+            // A sub-ms TTL truncates to 0, and `PEXPIRE key 0` deletes the lock while reporting success.
+            if (ttl < 1.milliseconds) throw InvalidTtlException()
             val res =
                 try {
                     circuitBreaker.execute {
                         client.eval(REFRESH_SCRIPT, listOf(fullKey), listOf(token, ttl.inWholeMilliseconds.toString()))
                     }
                 } catch (t: Throwable) {
-                    if (isError(t, ErrCircuitBroken)) throw t
+                    if (isError<CircuitBrokenException>(t)) throw t
                     throw op.error(t, "refreshing lock")
                 }
-            if (res == 0L) throw ErrLockNotHeld
+            if (res == 0L) throw LockNotHeldException()
         } finally {
             op.end()
         }

@@ -1,5 +1,8 @@
 package com.primandproper.platform.httpclient
 
+import com.primandproper.platform.observability.Keys
+import io.opentelemetry.api.common.Attributes
+import io.opentelemetry.api.trace.Span
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlin.time.Duration
@@ -36,6 +39,7 @@ public suspend fun HttpClientConfig.executeWithRetries(
 ): HttpResponse {
     val hook = retryHook ?: return attempt()
 
+    val span = Span.current()
     var attemptNumber = 0
     while (true) {
         attemptNumber++
@@ -48,13 +52,52 @@ public suspend fun HttpClientConfig.executeWithRetries(
                 HttpOutcome.Failed(t)
             }
 
-        val wait =
-            hook.nextDelay(attemptNumber, request, outcome)
-                ?: return when (outcome) {
-                    is HttpOutcome.Received -> outcome.response
-                    is HttpOutcome.Failed -> throw outcome.error
-                }
+        val wait = hook.nextDelay(attemptNumber, request, outcome)
+        if (wait == null) {
+            // Done retrying: publish how many retries the call cost (attempts past the first) so a
+            // trace shows the total without having to count the per-attempt events below.
+            span.recordRetryCount(attemptNumber - 1)
+            return when (outcome) {
+                is HttpOutcome.Received -> outcome.response
+                is HttpOutcome.Failed -> throw outcome.error
+            }
+        }
 
+        // About to retry: leave a breadcrumb for the attempt that just failed. Otherwise the retried
+        // errors are swallowed — only the final outcome would ever reach the span.
+        span.recordRetryAttempt(attemptNumber, outcome)
         delay(wait)
     }
+}
+
+/**
+ * Adds a span event for a single failed-and-retried [attempt], carrying the attempt number and the
+ * error (or the response status, when a non-exceptional response is what triggered the retry). No-ops
+ * on a non-recording span (noop tracer / sampled-out), mirroring [Span.recordHttpRequest].
+ */
+private fun Span.recordRetryAttempt(
+    attempt: Int,
+    outcome: HttpOutcome,
+) {
+    if (!isRecording) return
+    val attributes =
+        Attributes.builder()
+            .put("http.retry_attempt", attempt.toLong())
+            .apply {
+                when (outcome) {
+                    is HttpOutcome.Failed -> {
+                        put("exception.type", outcome.error.javaClass.name)
+                        outcome.error.message?.let { put("exception.message", it) }
+                    }
+                    is HttpOutcome.Received -> put(Keys.RESPONSE_STATUS, outcome.response.statusCode.toLong())
+                }
+            }
+            .build()
+    addEvent("http.retry", attributes)
+}
+
+/** Records the total number of retries on the span as `http.retry_count`. No-ops when not recording. */
+private fun Span.recordRetryCount(retries: Int) {
+    if (!isRecording) return
+    setAttribute("http.retry_count", retries.toLong())
 }

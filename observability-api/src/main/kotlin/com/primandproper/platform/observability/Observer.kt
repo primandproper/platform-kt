@@ -39,9 +39,9 @@ internal class DefaultObserver(
  */
 public fun Observer(
     name: String,
-    logger: Logger?,
-    tracerProvider: TracerProvider?,
-): Observer = DefaultObserver(name, ensureLogger(logger), ensureTracerProvider(tracerProvider).tracer(name))
+    logger: Logger = NoopLogger,
+    tracerProvider: TracerProvider = NoopTracerProvider,
+): Observer = DefaultObserver(name, logger, tracerProvider.tracer(name))
 
 /** An [Observer] backed by noop logger and tracer, for code that just needs a working Observer in tests. */
 public fun noopObserver(name: String): Observer = DefaultObserver(name, NoopLogger, NoopTracer)

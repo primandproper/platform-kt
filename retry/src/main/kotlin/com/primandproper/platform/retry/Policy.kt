@@ -1,9 +1,12 @@
 package com.primandproper.platform.retry
 
+import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlin.time.Duration
 
 /**
  * Executes a suspending operation with retry logic — the coroutine-native analog of platform-go's
@@ -30,17 +33,18 @@ public object NoopPolicy : Policy {
 
 /**
  * Builds a [Policy] that retries with exponential backoff per [config] — the analog of
- * `NewExponentialBackoffPolicy`. [config] is copied and defaulted at construction time
- * ([RetryConfig.ensureDefaults]), so mutating the original afterward has no effect, matching Go's
- * pass-by-value `Config`.
+ * `NewExponentialBackoffPolicy`. [config] is an immutable value already defaulted and validated at its
+ * own construction, matching Go's pass-by-value `Config`; build one with named arguments, e.g.
+ * `ExponentialBackoffPolicy(RetryConfig(maxAttempts = 5))`.
+ *
+ * [logger] is optional and defaults to a noop: when supplied, each retried attempt logs the attempt
+ * number, the delay before the next attempt, and the intermediate error at `warn`, so the failures
+ * that would otherwise be swallowed (only the *last* error is thrown) leave a trail.
  */
-public fun ExponentialBackoffPolicy(config: RetryConfig): Policy {
-    val normalized = config.copy().apply { ensureDefaults() }
-    return ExponentialBackoffPolicyImpl(normalized)
-}
-
-/** Builds a [Policy] from an inline config block: `ExponentialBackoffPolicy { maxAttempts = 5 }`. */
-public fun ExponentialBackoffPolicy(configure: RetryConfig.() -> Unit): Policy = ExponentialBackoffPolicy(RetryConfig().apply(configure))
+public fun ExponentialBackoffPolicy(
+    config: RetryConfig = RetryConfig(),
+    logger: Logger = NoopLogger,
+): Policy = ExponentialBackoffPolicyImpl(config, logger)
 
 /**
  * Reports whether [error] must abort the retry loop rather than trigger another attempt: an
@@ -53,18 +57,30 @@ internal fun isTerminal(
     retryIf: (Throwable) -> Boolean,
 ): Boolean = error is UnretryableException || !retryIf(error)
 
-internal class ExponentialBackoffPolicyImpl(config: RetryConfig) : Policy {
+internal class ExponentialBackoffPolicyImpl(
+    config: RetryConfig,
+    logger: Logger,
+) : Policy {
     private val maxAttempts: Int = config.maxAttempts
     private val retryIf: (Throwable) -> Boolean = config.retryIf
-    private val backoff =
-        Backoff(
-            initialDelay = config.initialDelay,
-            maxDelay = config.maxDelay,
-            multiplier = config.multiplier,
-            useJitter = config.useJitter,
-        )
+    private val initialDelay: Duration = config.initialDelay
+    private val maxDelay: Duration = config.maxDelay
+    private val multiplier: Double = config.multiplier
+    private val useJitter: Boolean = config.useJitter
+    private val log: Logger = logger
 
     override suspend fun <T> execute(operation: suspend () -> T): T {
+        // A fresh, loop-local backoff per invocation — mirroring Go's `delay` declared inside
+        // `Execute`. Keeping the escalating state off the long-lived policy object is what lets a
+        // DI-shared policy start every call from `initialDelay` again, and stops concurrent
+        // `execute()` calls from racing on a shared mutable field.
+        val backoff =
+            Backoff(
+                initialDelay = initialDelay,
+                maxDelay = maxDelay,
+                multiplier = multiplier,
+                useJitter = useJitter,
+            )
         var lastError: Throwable? = null
 
         for (attempt in 0 until maxAttempts) {
@@ -87,10 +103,18 @@ internal class ExponentialBackoffPolicyImpl(config: RetryConfig) : Policy {
                 throw lastError
             }
 
+            val nextDelay = backoff.next()
+            log
+                .withValue("attempt", attempt + 1)
+                .withValue("max_attempts", maxAttempts)
+                .withValue("delay", nextDelay)
+                .withError(lastError)
+                .warn("retry: attempt failed, retrying after delay")
+
             // delay() itself is a suspension point, so a cancellation during the sleep propagates
             // immediately too — the same race `select { case <-ctx.Done(): ... case <-time.After(...): }`
             // resolves in Go.
-            delay(backoff.next())
+            delay(nextDelay)
         }
 
         throw checkNotNull(lastError) { "retry: unreachable — maxAttempts must be >= 1" }

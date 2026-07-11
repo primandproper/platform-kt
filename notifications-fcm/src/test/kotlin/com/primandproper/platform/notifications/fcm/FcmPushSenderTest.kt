@@ -1,7 +1,7 @@
 package com.primandproper.platform.notifications.fcm
 
 import com.primandproper.platform.circuitbreaking.CircuitBreaker
-import com.primandproper.platform.circuitbreaking.ErrCircuitBroken
+import com.primandproper.platform.circuitbreaking.CircuitBrokenException
 import com.primandproper.platform.circuitbreaking.NoopCircuitBreaker
 import com.primandproper.platform.circuitbreaking.RecordingCircuitBreaker
 import com.primandproper.platform.httpclient.FakeHttpClient
@@ -9,8 +9,7 @@ import com.primandproper.platform.httpclient.HttpMethod
 import com.primandproper.platform.httpclient.HttpRequest
 import com.primandproper.platform.httpclient.HttpResponse
 import com.primandproper.platform.notifications.NotificationKeys
-import com.primandproper.platform.notifications.PLATFORM_ANDROID
-import com.primandproper.platform.notifications.PLATFORM_IOS
+import com.primandproper.platform.notifications.Platform
 import com.primandproper.platform.notifications.PlatformNotSupportedException
 import com.primandproper.platform.notifications.PushMessage
 import com.primandproper.platform.observability.testing.RecordingObserver
@@ -88,7 +87,7 @@ class FcmPushSenderTest {
         runTest {
             val (sender, _, fake) = recording()
 
-            sender.sendPush(PLATFORM_ANDROID, "device-token-abc", message())
+            sender.sendPush(Platform.ANDROID, "device-token-abc", message())
 
             val request = assertNotNull(fake.lastRequest)
             assertEquals(HttpMethod.POST, request.method)
@@ -110,7 +109,7 @@ class FcmPushSenderTest {
         runTest {
             val (sender, _, fake) = recording()
 
-            sender.sendToTopic(PLATFORM_ANDROID, "weather", message())
+            sender.sendToTopic(Platform.ANDROID, "weather", message())
 
             val msg = Json.parseToJsonElement(String(assertNotNull(fake.lastRequest!!.body))).jsonObject["message"]!!.jsonObject
             assertEquals("weather", msg["topic"]!!.jsonPrimitive.content)
@@ -124,10 +123,10 @@ class FcmPushSenderTest {
         runTest {
             val (sender, obs, _) = recording()
 
-            sender.sendPush(PLATFORM_ANDROID, "secret-device-token", message())
+            sender.sendPush(Platform.ANDROID, "secret-device-token", message())
 
             obs.assertObservedOperationWithValues(
-                NotificationKeys.PLATFORM to PLATFORM_ANDROID,
+                NotificationKeys.PLATFORM to Platform.ANDROID.wireName,
                 NotificationKeys.TITLE to "Test Title",
             )
             // The credential-bearing device token must never be recorded on the span.
@@ -140,7 +139,7 @@ class FcmPushSenderTest {
         runTest {
             val (sender, obs, _) = recording()
 
-            sender.sendPush(PLATFORM_ANDROID, "t", message())
+            sender.sendPush(Platform.ANDROID, "t", message())
 
             obs.assertObservedOperationWithValues(
                 NotificationKeys.MESSAGE_ID to "projects/test-project/messages/12345",
@@ -155,7 +154,7 @@ class FcmPushSenderTest {
             val errorBody = """{"error":{"code":401,"message":"unauthorized","status":"UNAUTHENTICATED"}}"""
             val (sender, obs, _) = recording(handler = { HttpResponse(statusCode = 401, body = errorBody.toByteArray()) })
 
-            val error = assertFailsWith<FcmApiException> { sender.sendPush(PLATFORM_ANDROID, "t", message()) }
+            val error = assertFailsWith<FcmApiException> { sender.sendPush(Platform.ANDROID, "t", message()) }
             assertEquals(401, error.statusCode)
             assertEquals("UNAUTHENTICATED", error.fcmStatus)
 
@@ -168,7 +167,7 @@ class FcmPushSenderTest {
         runTest {
             val (sender, obs, _) = recording(handler = { throw IOException("boom") })
 
-            assertFailsWith<IOException> { sender.sendPush(PLATFORM_ANDROID, "t", message()) }
+            assertFailsWith<IOException> { sender.sendPush(Platform.ANDROID, "t", message()) }
 
             obs.assertObservedOperationWithValues(NotificationKeys.TITLE to "Test Title")
             assertEquals(1, obs.operations.single().errors.size)
@@ -179,8 +178,8 @@ class FcmPushSenderTest {
         runTest {
             val (sender, obs, fake) = recording()
 
-            val error = assertFailsWith<PlatformNotSupportedException> { sender.sendPush(PLATFORM_IOS, "t", message()) }
-            assertEquals(PLATFORM_IOS, error.platform)
+            val error = assertFailsWith<PlatformNotSupportedException> { sender.sendPush(Platform.IOS, "t", message()) }
+            assertEquals(Platform.IOS, error.platform)
             assertTrue(fake.requests.isEmpty())
             assertEquals(1, obs.operations.single().errors.size)
         }
@@ -193,8 +192,8 @@ class FcmPushSenderTest {
             val breaker = RecordingCircuitBreaker(reject = true)
             val (sender, _, fake) = recording(breaker = breaker)
 
-            val error = assertFailsWith<Throwable> { sender.sendPush(PLATFORM_ANDROID, "t", message()) }
-            assertEquals(ErrCircuitBroken, error)
+            val error = assertFailsWith<Throwable> { sender.sendPush(Platform.ANDROID, "t", message()) }
+            assertTrue(error is CircuitBrokenException)
             assertTrue(fake.requests.isEmpty())
             assertEquals(1, breaker.rejectionCount)
         }
@@ -205,7 +204,7 @@ class FcmPushSenderTest {
             val breaker = RecordingCircuitBreaker()
             val (sender, _, _) = recording(breaker = breaker, handler = { HttpResponse(statusCode = 500) })
 
-            assertFailsWith<FcmApiException> { sender.sendPush(PLATFORM_ANDROID, "t", message()) }
+            assertFailsWith<FcmApiException> { sender.sendPush(Platform.ANDROID, "t", message()) }
             assertEquals(1, breaker.failureCount)
         }
 }

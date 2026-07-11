@@ -116,7 +116,10 @@ class S3BucketTest {
     fun `newS3UploadManager rejects a non-s3 provider without a client`() {
         assertFailsWith<UnsupportedOperationException> {
             newS3UploadManager(
-                com.primandproper.platform.uploads.objectstorage.StorageConfig(bucketName = "b", provider = "memory"),
+                com.primandproper.platform.uploads.objectstorage.StorageConfig(
+                    bucketName = "b",
+                    provider = com.primandproper.platform.uploads.objectstorage.StorageProvider.MEMORY,
+                ),
             )
         }
     }
@@ -126,7 +129,10 @@ class S3BucketTest {
         runTest {
             val u =
                 newS3UploadManager(
-                    com.primandproper.platform.uploads.objectstorage.StorageConfig(bucketName = "b", provider = "s3"),
+                    com.primandproper.platform.uploads.objectstorage.StorageConfig(
+                        bucketName = "b",
+                        provider = com.primandproper.platform.uploads.objectstorage.StorageProvider.S3,
+                    ),
                     s3Client = FakeS3Client(),
                 )
             u.saveBytes("k", "v".toByteArray())

@@ -12,6 +12,7 @@ import io.ktor.server.websocket.DefaultWebSocketServerSession
 import io.ktor.websocket.Frame
 import io.ktor.websocket.close
 import io.ktor.websocket.readText
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
@@ -52,7 +53,16 @@ public open class WebSocketEventStream internal constructor(
 
     override suspend fun close() {
         if (_done.complete(Unit)) {
-            runCatching { session.close() }
+            try {
+                session.close()
+            } catch (cancellation: CancellationException) {
+                // Never swallow cancellation: let a cancelled close tear down the coroutine.
+                throw cancellation
+            } catch (t: Throwable) {
+                // A best-effort close failing (socket already gone, etc.) shouldn't propagate, but it
+                // must not be silent either.
+                o11y.logger.error("closing WebSocket event stream", t)
+            }
         }
     }
 }

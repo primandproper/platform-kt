@@ -14,8 +14,12 @@ public class LoggingConfig {
 public class TracingConfig {
     public var provider: TracingProvider = TracingProvider.OTEL
 
-    /** OTLP collector endpoint, e.g. `https://collector:4317` (gRPC) or `.../v1/traces` (HTTP). */
-    public var endpoint: String = ""
+    /**
+     * OTLP collector endpoint, e.g. `https://collector:4317` (gRPC) or `.../v1/traces` (HTTP). `null`
+     * (the default) means "unset" — the Kotlin analog of Go's empty-string sentinel — and is required
+     * once the [OTEL][TracingProvider.OTEL] provider is selected (see [ObservabilityConfig.validate]).
+     */
+    public var endpoint: String? = null
 
     /** Head sampling probability in `[0, 1]`. `1.0` records everything; `0.0` records nothing. */
     public var sampleRatio: Double = 1.0
@@ -46,7 +50,7 @@ public class ObservabilityConfig {
     public fun validate() {
         require(serviceName.isNotBlank()) { "observability: serviceName is required" }
         if (tracing.provider == TracingProvider.OTEL) {
-            require(tracing.endpoint.isNotBlank()) {
+            require(!tracing.endpoint.isNullOrBlank()) {
                 "observability: tracing.endpoint is required for the OTEL provider"
             }
             require(tracing.sampleRatio in 0.0..1.0) {

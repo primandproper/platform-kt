@@ -1,14 +1,15 @@
 package com.primandproper.platform.authentication.tokens.jwt
 
 import com.primandproper.platform.authentication.tokens.Claims
-import com.primandproper.platform.authentication.tokens.ErrInvalidAudience
-import com.primandproper.platform.authentication.tokens.ErrInvalidIssuer
-import com.primandproper.platform.authentication.tokens.ErrReservedClaim
-import com.primandproper.platform.authentication.tokens.ErrTokenExpired
-import com.primandproper.platform.authentication.tokens.ErrTokenNotYetValid
+import com.primandproper.platform.authentication.tokens.InvalidAudienceException
+import com.primandproper.platform.authentication.tokens.InvalidIssuerException
 import com.primandproper.platform.authentication.tokens.IssuedToken
 import com.primandproper.platform.authentication.tokens.Issuer
+import com.primandproper.platform.authentication.tokens.ReservedClaimException
 import com.primandproper.platform.authentication.tokens.ReservedClaimKeys
+import com.primandproper.platform.authentication.tokens.TokenExpiredException
+import com.primandproper.platform.authentication.tokens.TokenLifetimeExceededException
+import com.primandproper.platform.authentication.tokens.TokenNotYetValidException
 import com.primandproper.platform.errors.wrap
 import com.primandproper.platform.identifiers.newUuid
 import com.primandproper.platform.observability.Keys
@@ -22,6 +23,7 @@ import java.util.Base64
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.ZERO
 import kotlin.time.Duration.Companion.minutes
 
 private const val NAME = "jwt_signer"
@@ -35,11 +37,14 @@ private val DEFAULT_EXPIRY = 10.minutes
  * Tokens are standard RFC 7519 JWTs — `base64url(header).base64url(payload).base64url(signature)`,
  * signed with HMAC-SHA256 over the header and payload via `javax.crypto`. The issuer owns the
  * registered claims (`exp`, `nbf`, `iat`, `aud`, `iss`, `sub`, `jti`); callers supply
- * application-specific claims via `extraClaims`, and passing a reserved key throws [ErrReservedClaim].
+ * application-specific claims via `extraClaims`, and passing a reserved key throws [ReservedClaimException].
  *
  * @param clock the time source for minting and validating claims; defaults to the system UTC clock.
  *   Tests inject a fixed clock to drive expiry deterministically.
  * @param observer the observability sink; defaults to a no-op.
+ * @param maxLifetime a hard ceiling on the requested token lifetime; [issueToken] rejects any request
+ *   exceeding it with [TokenLifetimeExceededException]. [ZERO] (the default) disables the ceiling.
+ *   [TokensConfig.Issuer] wires this from the configured access/refresh maxima.
  */
 public fun newJwtSigner(
     issuer: String,
@@ -47,7 +52,8 @@ public fun newJwtSigner(
     signingKey: ByteArray,
     observer: Observer = noopObserver(NAME),
     clock: Clock = Clock.systemUTC(),
-): Issuer = JwtSigner(issuer, audience, signingKey.copyOf(), observer, clock)
+    maxLifetime: Duration = ZERO,
+): Issuer = JwtSigner(issuer, audience, signingKey.copyOf(), observer, clock, maxLifetime)
 
 private class JwtSigner(
     private val issuer: String,
@@ -55,6 +61,7 @@ private class JwtSigner(
     private val signingKey: ByteArray,
     private val o11y: Observer,
     private val clock: Clock,
+    private val maxLifetime: Duration,
 ) : Issuer {
     override suspend fun issueToken(
         subject: String,
@@ -63,6 +70,14 @@ private class JwtSigner(
     ): IssuedToken =
         o11y.span(NAME) {
             val effectiveExpiry = if (expiry <= Duration.ZERO) DEFAULT_EXPIRY else expiry
+            // The configured lifetime is a hard ceiling: reject rather than clamp so a caller cannot
+            // mint a longer-lived token than policy allows and be unaware of it.
+            if (maxLifetime > ZERO && effectiveExpiry > maxLifetime) {
+                throw wrap(
+                    TokenLifetimeExceededException(),
+                    "requested lifetime $effectiveExpiry exceeds the configured maximum $maxLifetime",
+                )
+            }
             val jti = newUuid()
 
             set(Keys.USER_ID, subject)
@@ -84,7 +99,7 @@ private class JwtSigner(
                 )
             for ((k, v) in extraClaims) {
                 if (k in ReservedClaimKeys) {
-                    throw wrap(ErrReservedClaim, "reserved claim key \"$k\"")!!
+                    throw wrap(ReservedClaimException(), "reserved claim key \"$k\"")
                 }
                 claims[k] = v
             }
@@ -126,15 +141,15 @@ private class JwtSigner(
     private fun validate(claims: Map<String, Any?>) {
         val now = clock.instant()
 
-        val exp = claims.claimInstant("exp") ?: throw ErrTokenExpired
-        if (now.isAfter(exp)) throw ErrTokenExpired
+        val exp = claims.claimInstant("exp") ?: throw TokenExpiredException()
+        if (now.isAfter(exp)) throw TokenExpiredException()
 
         claims.claimInstant("nbf")?.let { nbf ->
-            if (now.isBefore(nbf)) throw ErrTokenNotYetValid
+            if (now.isBefore(nbf)) throw TokenNotYetValidException()
         }
 
-        if (claims["aud"] != audience) throw ErrInvalidAudience
-        if (claims["iss"] != issuer) throw ErrInvalidIssuer
+        if (claims["aud"] != audience) throw InvalidAudienceException()
+        if (claims["iss"] != issuer) throw InvalidIssuerException()
     }
 
     private fun hmac(data: ByteArray): ByteArray {
@@ -162,15 +177,9 @@ private class JwtClaims(
 
     override fun expiresAt(): Instant? = inner.claimInstant("exp")
 
-    override fun get(key: String): Pair<Any?, Boolean> {
-        val present = inner.containsKey(key)
-        return inner[key] to present
-    }
+    override fun get(key: String): Any? = inner[key]
 
-    override fun getString(key: String): Pair<String, Boolean> {
-        val v = inner[key]
-        return if (v is String) v to true else "" to false
-    }
+    override fun getStringOrNull(key: String): String? = inner[key] as? String
 }
 
 /** base64url without padding, matching the JWT segment encoding. */

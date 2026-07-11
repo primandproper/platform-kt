@@ -1,15 +1,29 @@
 package com.primandproper.platform.analytics
 
 /**
- * Known analytics providers. Ports platform-go's `analyticscfg.ProviderSegment` / `ProviderPostHog`.
+ * Known analytics providers. Ports platform-go's `analyticscfg.ProviderSegment` / `ProviderPostHog`,
+ * modelled as an enum so an unknown provider is rejected the way Go's `validation.In(...)` rejects it.
+ * [value] is the wire/string form validated against configuration.
  */
-public object Provider {
-    public const val SEGMENT: String = "segment"
-    public const val POSTHOG: String = "posthog"
-}
+public enum class AnalyticsProvider(
+    public val value: String,
+) {
+    SEGMENT("segment"),
+    POSTHOG("posthog"),
+    ;
 
-/** Set of recognized providers, used by [SourceConfig.validate]. */
-private val KNOWN_PROVIDERS = setOf(Provider.SEGMENT, Provider.POSTHOG)
+    public companion object {
+        /**
+         * Resolves a provider from its string [value] (trimmed, case-insensitive), or `null` if it
+         * names no known provider — the parse edge where a raw config string becomes the typed enum.
+         * Mirrors Go's `validation.In(ProviderSegment, ProviderPostHog)` rejecting an unknown name.
+         */
+        public fun fromValue(value: String): AnalyticsProvider? {
+            val normalized = value.trim().lowercase()
+            return entries.firstOrNull { it.value == normalized }
+        }
+    }
+}
 
 /** Segment credentials. Port of platform-go's `segment.Config`. */
 public data class SegmentConfig(
@@ -32,33 +46,37 @@ public data class PostHogConfig(
  * backend wiring layer, since `:circuitbreaking` is injected at the backend, not declared here).
  */
 public data class SourceConfig(
-    val provider: String = "",
+    val provider: AnalyticsProvider,
     val segment: SegmentConfig? = null,
     val posthog: PostHogConfig? = null,
 ) {
     /**
-     * Validates that the provider is known and its matching credentials block is present, so a source
-     * with no provider/key fails fast rather than silently degrading to a noop at runtime. Mirrors
-     * `SourceConfig.ValidateWithContext`. Returns a human-readable reason on failure, or `null` when
-     * valid.
+     * Validates that the [provider]'s matching credentials block is present, so a source with no key
+     * fails fast rather than silently degrading to a noop at runtime. The provider itself is already a
+     * typed [AnalyticsProvider] (resolved at the parse edge), so the `In(...)` check Go performs is
+     * enforced by the type; only the "provider requires its credentials block" rule remains, over an
+     * exhaustive `when`. Mirrors `SourceConfig.ValidateWithContext`, and matches the throwing
+     * `validate()` convention every other platform config uses. Throws
+     * [InvalidAnalyticsSourceConfigException] on failure.
      */
-    public fun validate(): String? {
-        val p = provider.trim().lowercase()
-        if (p !in KNOWN_PROVIDERS) {
-            return "provider must be one of ${KNOWN_PROVIDERS.sorted()}, was \"$provider\""
+    public fun validate() {
+        when (provider) {
+            AnalyticsProvider.SEGMENT ->
+                if (segment == null || segment.apiToken.isBlank()) {
+                    throw InvalidAnalyticsSourceConfigException("segment provider requires a non-empty segment API token")
+                }
+            AnalyticsProvider.POSTHOG ->
+                if (posthog == null || posthog.apiKey.isBlank()) {
+                    throw InvalidAnalyticsSourceConfigException("posthog provider requires a non-empty posthog API key")
+                }
         }
-        if (p == Provider.SEGMENT && (segment == null || segment.apiToken.isBlank())) {
-            return "segment provider requires a non-empty segment API token"
-        }
-        if (p == Provider.POSTHOG && (posthog == null || posthog.apiKey.isBlank())) {
-            return "posthog provider requires a non-empty posthog API key"
-        }
-        return null
     }
-
-    /** Whether this source passes [validate]. */
-    public val isValid: Boolean get() = validate() == null
 }
+
+/** Thrown when [SourceConfig.validate] finds a missing credentials block for the selected provider. */
+public class InvalidAnalyticsSourceConfigException(
+    reason: String,
+) : IllegalArgumentException(reason)
 
 /**
  * Per-source analytics config for the analytics proxy. The sources are codified (`ios` and `web`),

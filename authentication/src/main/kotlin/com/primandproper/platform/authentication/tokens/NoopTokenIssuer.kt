@@ -28,7 +28,7 @@ private object NoopClaims : Claims {
 
     override fun expiresAt(): Instant? = null
 
-    override fun get(key: String): Pair<Any?, Boolean> = null to false
+    override fun get(key: String): Any? = null
 
-    override fun getString(key: String): Pair<String, Boolean> = "" to false
+    override fun getStringOrNull(key: String): String? = null
 }

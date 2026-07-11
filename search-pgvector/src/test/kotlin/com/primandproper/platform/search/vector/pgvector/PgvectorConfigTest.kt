@@ -2,7 +2,7 @@ package com.primandproper.platform.search.vector.pgvector
 
 import com.primandproper.platform.errors.isError
 import com.primandproper.platform.search.vector.DistanceMetric
-import com.primandproper.platform.search.vector.ErrInvalidDimension
+import com.primandproper.platform.search.vector.InvalidDimensionException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -25,7 +25,7 @@ class PgvectorConfigTest {
     @Test
     fun `validate rejects a non-positive dimension`() {
         val err = assertFailsWith<Throwable> { PgvectorConfig(dimension = 0).validate() }
-        assertTrue(isError(err, ErrInvalidDimension))
+        assertTrue(isError<InvalidDimensionException>(err))
     }
 
     @Test

@@ -6,6 +6,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.TestTimeSource
 
 /** Port of platform-go's `cache/memory/memory_test.go`. */
 class InMemoryCacheTest {
@@ -101,5 +103,55 @@ class InMemoryCacheTest {
     fun `Ping succeeds`() =
         runTest {
             InMemoryCache<Example>().ping()
+        }
+
+    @Test
+    fun `Get returns null once the entry has expired`() =
+        runTest {
+            val time = TestTimeSource()
+            val cache = InMemoryCache<Example>(RecordingObserver(), expiry = 1000.milliseconds, timeSource = time)
+            cache.set(EXAMPLE_KEY, Example("v"))
+
+            assertEquals(Example("v"), cache.get(EXAMPLE_KEY))
+            time += 1000.milliseconds // reaches the deadline
+            assertNull(cache.get(EXAMPLE_KEY))
+        }
+
+    @Test
+    fun `an expired entry is evicted from the backing map on read`() =
+        runTest {
+            val time = TestTimeSource()
+            val cache = InMemoryCache<Example>(RecordingObserver(), expiry = 500.milliseconds, timeSource = time)
+            cache.set(EXAMPLE_KEY, Example("v"))
+            assertEquals(1, cache.cache.size)
+
+            time += 1000.milliseconds
+            assertNull(cache.get(EXAMPLE_KEY))
+            assertEquals(0, cache.cache.size)
+        }
+
+    @Test
+    fun `a write opportunistically sweeps already-expired entries`() =
+        runTest {
+            val time = TestTimeSource()
+            val cache = InMemoryCache<Example>(RecordingObserver(), expiry = 500.milliseconds, timeSource = time)
+            cache.set("old", Example("old"))
+
+            time += 1000.milliseconds
+            cache.set("new", Example("new"))
+
+            assertEquals(setOf("new"), cache.cache.keys)
+        }
+
+    @Test
+    fun `the size guard caps the number of retained entries`() =
+        runTest {
+            // Never-expiring entries (INFINITE default) still cannot grow the heap past the cap.
+            val cache = InMemoryCache<Example>(RecordingObserver(), maxEntries = 2)
+            cache.set("a", Example("a"))
+            cache.set("b", Example("b"))
+            cache.set("c", Example("c"))
+
+            assertEquals(2, cache.cache.size)
         }
 }

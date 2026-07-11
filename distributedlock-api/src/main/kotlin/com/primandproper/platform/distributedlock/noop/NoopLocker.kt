@@ -9,10 +9,11 @@ import kotlin.time.Duration
  * succeeds. Port of platform-go's `distributedlock/noop.locker`.
  *
  * Use this when distributed locking is not needed in a given deployment (single replica, dev
- * environments), or as the safe fallback for an unknown/empty provider — the analog of Go's
- * `ProvideLocker` `default:` branch.
+ * environments). Selecting it must be explicit via the `"noop"` provider — an unknown/empty provider
+ * string is now rejected rather than silently resolved here (see [com.primandproper.platform.distributedlock.DistributedLockProvider.fromValue]),
+ * so a config typo can no longer quietly disable distributed locking.
  */
-public class NoopLocker : Locker {
+public object NoopLocker : Locker {
     override suspend fun acquire(
         key: String,
         ttl: Duration,

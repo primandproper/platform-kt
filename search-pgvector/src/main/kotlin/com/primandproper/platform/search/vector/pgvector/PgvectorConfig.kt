@@ -1,7 +1,7 @@
 package com.primandproper.platform.search.vector.pgvector
 
 import com.primandproper.platform.search.vector.DistanceMetric
-import com.primandproper.platform.search.vector.ErrInvalidDimension
+import com.primandproper.platform.search.vector.InvalidDimensionException
 
 /**
  * Configures the pgvector-backed vector index. Port of platform-go's `pgvector.Config`.
@@ -24,6 +24,6 @@ public data class PgvectorConfig(
      * non-null enum here, so Go's `validation.In(...)` on the metric is satisfied by construction.
      */
     public fun validate() {
-        if (dimension < 1) throw ErrInvalidDimension
+        if (dimension < 1) throw InvalidDimensionException()
     }
 }

@@ -35,19 +35,19 @@ class ImagesTest {
     fun `rejects a supported-but-unwanted format`() {
         // BMP has an ImageIO decoder, but is not one of PNG/JPEG/GIF, so it must be rejected by type.
         val err = assertFailsWith<PlatformException> { decodeImage(encode("bmp")) }
-        assertTrue(isError(err, ErrInvalidImageContentType))
+        assertTrue(isError<InvalidImageContentTypeException>(err))
     }
 
     @Test
     fun `rejects undecodable data`() {
         val err = assertFailsWith<PlatformException> { decodeImage(byteArrayOf(1, 2, 3, 4, 5)) }
-        assertTrue(isError(err, ErrInvalidImageContentType))
+        assertTrue(isError<InvalidImageContentTypeException>(err))
     }
 
     @Test
     fun `rejects an image whose dimensions exceed the maximum`() {
         val err = assertFailsWith<PlatformException> { decodeImage(encode("png", width = MAX_IMAGE_DIMENSION + 1, height = 1)) }
-        assertTrue(isError(err, ErrImageTooLarge))
+        assertTrue(isError<ImageTooLargeException>(err))
     }
 
     @Test
@@ -60,7 +60,7 @@ class ImagesTest {
     fun `thumbnail rejects zero dimensions and is otherwise a documented seam`() {
         val img = decodeImage(encode("png"))
         val dimErr = assertFailsWith<PlatformException> { img.thumbnail(0, 10) }
-        assertTrue(isError(dimErr, ErrInvalidThumbnailDimensions))
+        assertTrue(isError<InvalidThumbnailDimensionsException>(dimErr))
         assertFailsWith<NotImplementedError> { img.thumbnail(2, 2) }
     }
 }

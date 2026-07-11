@@ -3,11 +3,16 @@ package com.primandproper.platform.notifications.async
 import com.primandproper.platform.notifications.NotificationKeys
 import com.primandproper.platform.observability.Keys
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.Observer
 import com.primandproper.platform.observability.TracerProvider
 import com.primandproper.platform.observability.span
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
 import kotlin.time.Duration
 
 /** Component name for the in-memory notifier's Observer. */
@@ -17,7 +22,7 @@ internal const val NAME: String = "in_memory_async_notifier"
 public const val DEFAULT_MAX_ATTEMPTS: Int = 3
 
 /** A live subscription to a channel. Cancel it to stop receiving events. */
-public interface Subscription {
+public fun interface Subscription {
     /** Removes this subscriber; subsequent publishes skip it. Idempotent. */
     public fun cancel()
 }
@@ -56,8 +61,8 @@ public class InMemoryAsyncNotifier internal constructor(
     public constructor(
         maxAttempts: Int = DEFAULT_MAX_ATTEMPTS,
         retryDelay: Duration = Duration.ZERO,
-        logger: Logger? = null,
-        tracerProvider: TracerProvider? = null,
+        logger: Logger = NoopLogger,
+        tracerProvider: TracerProvider = NoopTracerProvider,
     ) : this(Observer(NAME, logger, tracerProvider), maxAttempts, retryDelay) {
         require(maxAttempts >= 1) { "maxAttempts must be >= 1, was $maxAttempts" }
     }
@@ -83,12 +88,24 @@ public class InMemoryAsyncNotifier internal constructor(
         synchronized(lock) {
             if (!closed) handlers += entry
         }
-        return object : Subscription {
-            override fun cancel() {
-                synchronized(lock) { handlers.remove(entry) }
-            }
+        return Subscription {
+            synchronized(lock) { handlers.remove(entry) }
         }
     }
+
+    /**
+     * A `Flow`-based alternative to [subscribe]: a **cold** flow of every [AsyncEvent] published to
+     * [channel]. Collecting subscribes; cancelling or completing the collector unsubscribes (Go's
+     * subscription teardown), so the caller never has to hold and [Subscription.cancel] a handle. The
+     * flow is a `callbackFlow` over the same [subscribe]/[Subscription.cancel] machinery, so delivery
+     * ordering and channel filtering match [publish] exactly. Backpressure propagates: a slow collector
+     * suspends the publishing [publish] call, matching a single-connection transport.
+     */
+    public fun events(channel: String): Flow<AsyncEvent> =
+        callbackFlow {
+            val subscription = subscribe(channel) { event -> send(event) }
+            awaitClose { subscription.cancel() }
+        }
 
     override suspend fun publish(
         channel: String,
@@ -118,12 +135,17 @@ public class InMemoryAsyncNotifier internal constructor(
                 throw cancellation
             } catch (error: Throwable) {
                 if (attempt >= maxAttempts) throw error
+                // Intermediate failures are recoverable but were previously silent; surface them at warn
+                // so a flapping subscriber is visible even when a later attempt ultimately succeeds.
+                o11y.logger
+                    .withError(error)
+                    .warn("async delivery to channel '${target.channel}' failed on attempt $attempt; retrying")
                 if (retryDelay > Duration.ZERO) delay(retryDelay)
             }
         }
     }
 
-    override fun close() {
+    override suspend fun close() {
         synchronized(lock) {
             handlers.clear()
             closed = true

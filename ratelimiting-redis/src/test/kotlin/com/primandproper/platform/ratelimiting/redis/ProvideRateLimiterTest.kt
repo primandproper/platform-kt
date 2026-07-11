@@ -15,7 +15,7 @@ class ProvideRateLimiterTest {
     @Test
     fun `noop provider builds a noop limiter`() =
         runTest {
-            val rl = provideRateLimiter(RateLimitingConfig(provider = RateLimitingProvider.NOOP))
+            val rl = RateLimiter(RateLimitingConfig(provider = RateLimitingProvider.NOOP))
             assertTrue(rl is NoopRateLimiter)
             assertTrue(rl.allow("x"))
         }
@@ -24,7 +24,7 @@ class ProvideRateLimiterTest {
     fun `default provider builds a noop limiter`() =
         runTest {
             // The RateLimitingConfig default provider is NOOP — Go treats a blank provider the same way.
-            val rl = provideRateLimiter(RateLimitingConfig())
+            val rl = RateLimiter(RateLimitingConfig())
             assertTrue(rl is NoopRateLimiter)
             assertTrue(rl.allow("x"))
         }
@@ -33,7 +33,7 @@ class ProvideRateLimiterTest {
     fun `memory provider builds an in-memory limiter that throttles`() =
         runTest {
             val rl =
-                provideRateLimiter(
+                RateLimiter(
                     RateLimitingConfig(provider = RateLimitingProvider.MEMORY, requestsPerSec = 1.0, burstSize = 1),
                 )
             assertTrue(rl is InMemoryRateLimiter)
@@ -44,7 +44,7 @@ class ProvideRateLimiterTest {
     @Test
     fun `redis provider builds a redis limiter without connecting`() {
         val rl =
-            provideRateLimiter(
+            RateLimiter(
                 config = RateLimitingConfig(provider = RateLimitingProvider.REDIS),
                 redisConfig = RedisRateLimitingConfig(listOf("localhost:6379")),
             )
@@ -56,7 +56,7 @@ class ProvideRateLimiterTest {
         runTest {
             val client = FakeRedisClient(result = 1L)
             val rl =
-                provideRateLimiter(
+                RateLimiter(
                     config = RateLimitingConfig(provider = RateLimitingProvider.REDIS, requestsPerSec = 1.0, burstSize = 1),
                     redisConfig = RedisRateLimitingConfig(listOf("localhost:6379")),
                     redisClient = client,
@@ -68,7 +68,7 @@ class ProvideRateLimiterTest {
     @Test
     fun `redis provider missing config fails`() {
         assertFailsWith<IllegalArgumentException> {
-            provideRateLimiter(RateLimitingConfig(provider = RateLimitingProvider.REDIS))
+            RateLimiter(RateLimitingConfig(provider = RateLimitingProvider.REDIS))
         }
     }
 }

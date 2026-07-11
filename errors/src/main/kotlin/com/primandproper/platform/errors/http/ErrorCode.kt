@@ -3,7 +3,7 @@ package com.primandproper.platform.errors.http
 /**
  * A string code identifying a specific error condition in an API response, mirroring platform-go's
  * `http.ErrorCode`. Modeled as a value class rather than a closed enum because domains may register
- * their own codes (e.g. `"E_CUSTOM"`) through [RegisterHttpErrorMapper]; the platform-owned codes
+ * their own codes (e.g. `"E_CUSTOM"`) through [HttpErrorMapperRegistry]; the platform-owned codes
  * are the `E1xx` constants on the companion.
  *
  * [toHttpStatus] is the pure mapping the task calls for: platform-go leaves the HTTP status to the

@@ -1,14 +1,14 @@
 package com.primandproper.platform.distributedlock.postgres
 
 import com.primandproper.platform.circuitbreaking.CircuitBreaker
+import com.primandproper.platform.circuitbreaking.CircuitBrokenException
 import com.primandproper.platform.circuitbreaking.CircuitState
-import com.primandproper.platform.circuitbreaking.ErrCircuitBroken
 import com.primandproper.platform.circuitbreaking.NoopCircuitBreaker
 import com.primandproper.platform.circuitbreaking.RecordingCircuitBreaker
-import com.primandproper.platform.distributedlock.ErrEmptyKey
-import com.primandproper.platform.distributedlock.ErrInvalidTTL
-import com.primandproper.platform.distributedlock.ErrLockNotAcquired
-import com.primandproper.platform.distributedlock.ErrLockNotHeld
+import com.primandproper.platform.distributedlock.EmptyKeyException
+import com.primandproper.platform.distributedlock.InvalidTtlException
+import com.primandproper.platform.distributedlock.LockNotAcquiredException
+import com.primandproper.platform.distributedlock.LockNotHeldException
 import com.primandproper.platform.errors.PlatformException
 import com.primandproper.platform.errors.isError
 import com.primandproper.platform.observability.Observer
@@ -26,15 +26,10 @@ import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TestTimeSource
 
 /** Port of the unit tests in platform-go's `distributedlock/postgres/postgres_test.go`, against a fake client. */
 class PostgresLockerTest {
-    private class FakeClock(var millis: Long = 0L) {
-        fun advance(by: Long) {
-            millis += by
-        }
-    }
-
     // Passes the first [proceedFor] calls, then rejects — the analog of the Go tests' counter-driven
     // CircuitBreakerMock ("Acquire proceeds, the next call is blocked").
     private class GateBreaker(private val proceedFor: Int) : CircuitBreaker {
@@ -43,7 +38,7 @@ class PostgresLockerTest {
 
         override suspend fun <T> execute(block: suspend () -> T): T {
             calls++
-            if (calls > proceedFor) throw ErrCircuitBroken
+            if (calls > proceedFor) throw CircuitBrokenException()
             return block()
         }
     }
@@ -51,10 +46,10 @@ class PostgresLockerTest {
     private fun locker(
         client: FakeAdvisoryLockClient,
         cb: CircuitBreaker = NoopCircuitBreaker,
-        clock: FakeClock = FakeClock(),
+        clock: TestTimeSource = TestTimeSource(),
         obs: Observer = noopObserver("test"),
         namespace: Int = 0,
-    ): PostgresLocker = PostgresLocker(obs, client, cb, namespace, 5.seconds) { clock.millis }
+    ): PostgresLocker = PostgresLocker(obs, client, cb, namespace, 5.seconds, clock)
 
     // ---- Acquire ----
 
@@ -70,28 +65,37 @@ class PostgresLockerTest {
             val op = obs.operations.last { it.name == "Acquire" }
             assertTrue(op.errors.isEmpty())
             assertEquals(hashLockID(0, "k"), op.values["lock.id"])
+            assertEquals("acquired", op.values["lock.outcome"])
+        }
+
+    @Test
+    fun `Acquire records a contended outcome`() =
+        runTest {
+            val obs = RecordingObserver()
+            val fc = FakeAdvisoryLockClient(tryLockResult = false)
+            assertFailsWith<LockNotAcquiredException> { locker(fc, obs = obs).acquire("k", 1.minutes) }
+            val op = obs.operations.last { it.name == "Acquire" }
+            assertEquals("contended", op.values["lock.outcome"])
         }
 
     @Test
     fun `Acquire rejects empty key`() =
         runTest {
             val e = assertFailsWith<PlatformException> { locker(FakeAdvisoryLockClient()).acquire("", 1.minutes) }
-            assertTrue(isError(e, ErrEmptyKey))
+            assertTrue(isError<EmptyKeyException>(e))
         }
 
     @Test
     fun `Acquire rejects zero and negative TTL`() =
         runTest {
             assertTrue(
-                isError(
+                isError<InvalidTtlException>(
                     assertFailsWith<PlatformException> { locker(FakeAdvisoryLockClient()).acquire("k", Duration.ZERO) },
-                    ErrInvalidTTL,
                 ),
             )
             assertTrue(
-                isError(
+                isError<InvalidTtlException>(
                     assertFailsWith<PlatformException> { locker(FakeAdvisoryLockClient()).acquire("k", -(1.seconds)) },
-                    ErrInvalidTTL,
                 ),
             )
         }
@@ -101,7 +105,7 @@ class PostgresLockerTest {
         runTest {
             val cb = RecordingCircuitBreaker(reject = true)
             val e = assertFailsWith<PlatformException> { locker(FakeAdvisoryLockClient(), cb).acquire("k", 1.minutes) }
-            assertTrue(isError(e, ErrCircuitBroken))
+            assertTrue(isError<CircuitBrokenException>(e))
             assertEquals(1, cb.rejectionCount)
         }
 
@@ -111,7 +115,7 @@ class PostgresLockerTest {
             val cb = RecordingCircuitBreaker()
             val fc = FakeAdvisoryLockClient(tryLockResult = false)
             val e = assertFailsWith<PlatformException> { locker(fc, cb).acquire("k", 1.minutes) }
-            assertTrue(isError(e, ErrLockNotAcquired))
+            assertTrue(isError<LockNotAcquiredException>(e))
             assertEquals(1, cb.successCount)
             assertTrue(fc.connections.single().released)
         }
@@ -122,7 +126,7 @@ class PostgresLockerTest {
             val cb = RecordingCircuitBreaker()
             val fc = FakeAdvisoryLockClient(reserveError = PoolSaturatedException())
             val e = assertFailsWith<PlatformException> { locker(fc, cb).acquire("k", 1.minutes) }
-            assertTrue(isError(e, ErrLockNotAcquired))
+            assertTrue(isError<LockNotAcquiredException>(e))
             assertEquals(1, cb.successCount)
         }
 
@@ -176,7 +180,7 @@ class PostgresLockerTest {
             val h = locker(fc).acquire("k", 1.minutes)
             h.release()
             val e = assertFailsWith<PlatformException> { h.release() }
-            assertTrue(isError(e, ErrLockNotHeld))
+            assertTrue(isError<LockNotHeldException>(e))
         }
 
     @Test
@@ -186,7 +190,7 @@ class PostgresLockerTest {
             val fc = FakeAdvisoryLockClient(tryLockResult = true)
             val h = locker(fc, cb).acquire("k", 1.minutes)
             val e = assertFailsWith<PlatformException> { h.release() }
-            assertTrue(isError(e, ErrCircuitBroken))
+            assertTrue(isError<CircuitBrokenException>(e))
             assertEquals(2, cb.calls)
         }
 
@@ -204,14 +208,14 @@ class PostgresLockerTest {
     @Test
     fun `Release after TTL expiry returns ErrLockNotHeld but frees the conn`() =
         runTest {
-            val clock = FakeClock()
+            val clock = TestTimeSource()
             val fc = FakeAdvisoryLockClient(tryLockResult = true, unlockResult = true)
             val h = locker(fc, clock = clock).acquire("k", 1.minutes)
 
-            clock.advance(2L * 60 * 1000) // past the 1-minute TTL
+            clock += 2.minutes // past the 1-minute TTL
 
             val e = assertFailsWith<PlatformException> { h.release() }
-            assertTrue(isError(e, ErrLockNotHeld))
+            assertTrue(isError<LockNotHeldException>(e))
             assertEquals(1, fc.connections.single().unlockCalls)
             assertTrue(fc.connections.single().released)
         }
@@ -234,7 +238,7 @@ class PostgresLockerTest {
             val fc = FakeAdvisoryLockClient(tryLockResult = true)
             val h = locker(fc).acquire("k", 1.minutes)
             val e = assertFailsWith<PlatformException> { h.refresh(Duration.ZERO) }
-            assertTrue(isError(e, ErrInvalidTTL))
+            assertTrue(isError<InvalidTtlException>(e))
             assertEquals(1.minutes, h.ttl)
         }
 
@@ -245,7 +249,7 @@ class PostgresLockerTest {
             val h = locker(fc).acquire("k", 1.minutes)
             h.release()
             val e = assertFailsWith<PlatformException> { h.refresh(1.minutes) }
-            assertTrue(isError(e, ErrLockNotHeld))
+            assertTrue(isError<LockNotHeldException>(e))
         }
 
     @Test
@@ -255,7 +259,7 @@ class PostgresLockerTest {
             val fc = FakeAdvisoryLockClient(tryLockResult = true, alive = false)
             val h = locker(fc, cb).acquire("k", 1.minutes)
             val e = assertFailsWith<PlatformException> { h.refresh(5.minutes) }
-            assertTrue(isError(e, ErrLockNotHeld))
+            assertTrue(isError<LockNotHeldException>(e))
             assertEquals(1, cb.failureCount)
             assertEquals(1.minutes, h.ttl)
         }
@@ -263,18 +267,34 @@ class PostgresLockerTest {
     @Test
     fun `Refresh after TTL expiry returns ErrLockNotHeld and frees the lock`() =
         runTest {
-            val clock = FakeClock()
+            val clock = TestTimeSource()
             val fc = FakeAdvisoryLockClient(tryLockResult = true, unlockResult = true)
             val h = locker(fc, clock = clock).acquire("k", 1.minutes)
 
-            clock.advance(2L * 60 * 1000)
+            clock += 2.minutes
 
             val e = assertFailsWith<PlatformException> { h.refresh(5.minutes) }
-            assertTrue(isError(e, ErrLockNotHeld))
+            assertTrue(isError<LockNotHeldException>(e))
             assertEquals(1.minutes, h.ttl) // TTL bookkeeping untouched on a failed refresh
             assertEquals(1, fc.connections.single().unlockCalls)
             // The lock was dropped, so a later release just sees it gone.
-            assertTrue(isError(assertFailsWith<PlatformException> { h.release() }, ErrLockNotHeld))
+            assertTrue(isError<LockNotHeldException>(assertFailsWith<PlatformException> { h.release() }))
+        }
+
+    @Test
+    fun `Refresh records the swallowed liveness-probe exception`() =
+        runTest {
+            val obs = RecordingObserver()
+            val cb = RecordingCircuitBreaker()
+            val fc = FakeAdvisoryLockClient(tryLockResult = true, aliveError = RuntimeException("probe boom"))
+            val h = locker(fc, cb, obs = obs).acquire("k", 1.minutes)
+
+            // A failed liveness probe still surfaces as not-held and trips the breaker, but the probe
+            // exception is no longer silently discarded — it is recorded on the Refresh operation.
+            assertTrue(isError<LockNotHeldException>(assertFailsWith<PlatformException> { h.refresh(5.minutes) }))
+            assertEquals(1, cb.failureCount)
+            val op = obs.operations.last { it.name == "Refresh" }
+            assertTrue(op.errors.any { it.message == "probe boom" })
         }
 
     @Test
@@ -284,7 +304,7 @@ class PostgresLockerTest {
             val fc = FakeAdvisoryLockClient(tryLockResult = true)
             val h = locker(fc, cb).acquire("k", 1.minutes)
             val e = assertFailsWith<PlatformException> { h.refresh(1.minutes) }
-            assertTrue(isError(e, ErrCircuitBroken))
+            assertTrue(isError<CircuitBrokenException>(e))
             assertEquals(2, cb.calls)
         }
 
@@ -293,9 +313,11 @@ class PostgresLockerTest {
     @Test
     fun `Ping success and error`() =
         runTest {
+            val obs = RecordingObserver()
             val fc = FakeAdvisoryLockClient()
-            locker(fc).ping()
+            locker(fc, obs = obs).ping()
             assertEquals(1, fc.pingCalls)
+            assertTrue(obs.operations.any { it.name == "Ping" }) // ping runs under its own span
 
             val bad = FakeAdvisoryLockClient(pingError = RuntimeException("ping boom"))
             assertFailsWith<RuntimeException> { locker(bad).ping() }

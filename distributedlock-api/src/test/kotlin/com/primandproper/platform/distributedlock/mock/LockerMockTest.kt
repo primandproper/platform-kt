@@ -24,8 +24,8 @@ class LockerMockTest {
             mock.close()
 
             assertEquals(listOf("k" to 1.seconds), mock.acquireCalls)
-            assertEquals(1, mock.pingCalls.size)
-            assertEquals(1, mock.closeCalls.size)
+            assertEquals(1, mock.pingCalls)
+            assertEquals(1, mock.closeCalls)
         }
 
     @Test
@@ -52,9 +52,9 @@ class LockerMockTest {
             lock.refresh(5.seconds)
 
             assertEquals(5.seconds, refreshed)
-            assertEquals(1, lock.keyCalls.size)
-            assertEquals(1, lock.ttlCalls.size)
-            assertEquals(1, lock.releaseCalls.size)
+            assertEquals(1, lock.keyCalls)
+            assertEquals(1, lock.ttlCalls)
+            assertEquals(1, lock.releaseCalls)
             assertEquals(listOf(5.seconds), lock.refreshCalls)
         }
 

@@ -16,7 +16,7 @@ import java.time.Duration as JavaDuration
  * — the recommended pattern for driving Lettuce from `suspend` code.
  *
  * The connection is opened lazily on first use (under a [Mutex]) rather than in the constructor, so
- * constructing a [RedisRateLimiter] — and `provideRateLimiter` with a Redis provider — never blocks
+ * constructing a [RedisRateLimiter] — and `RateLimiter` with a Redis provider — never blocks
  * on, or requires, a reachable server. This matches platform-go, whose `redis.NewClient` builds a
  * lazily connecting client.
  *

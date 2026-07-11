@@ -72,7 +72,7 @@ class ElasticsearchIndexManagerTest {
     fun `Search rejects an empty query`() =
         runTest {
             assertFailsWith<Throwable> { manager().search("") }
-                .also { assertTrue(it === ErrEmptyQueryProvided) }
+                .also { assertTrue(it is EmptyQueryProvidedException) }
         }
 
     @Test

@@ -13,7 +13,7 @@ package com.primandproper.platform.embeddings
  * nil-input case is unrepresentable at the type level and `ErrNilInput` has no analog — the same
  * simplification `:email-api` makes with its non-null `OutboundEmailMessage`.
  */
-public interface Embedder {
+public fun interface Embedder {
     /** Generates a vector [Embedding] for [input], throwing on failure. */
     public suspend fun generateEmbedding(input: EmbeddingInput): Embedding
 }

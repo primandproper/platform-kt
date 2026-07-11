@@ -69,10 +69,11 @@ class KeystoreSecretStoreTest {
         }
 
     @Test
-    fun `close is a no-op`() {
-        val (s, _) = store()
-        s.close()
-    }
+    fun `close is a no-op`() =
+        runTest {
+            val (s, _) = store()
+            s.close()
+        }
 }
 
 /** Minimal in-memory [SharedPreferences] for unit tests: real behavior, no Android runtime. */

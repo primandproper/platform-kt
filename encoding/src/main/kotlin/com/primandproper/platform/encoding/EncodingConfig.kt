@@ -23,4 +23,4 @@ public data class EncodingConfig(
  * the raw string through `contentTypeFromString` — so an unrecognized value falls back to
  * [DEFAULT_CONTENT_TYPE] rather than failing.
  */
-public fun provideContentType(config: EncodingConfig): ContentType = contentTypeFromMediaType(config.contentType)
+public fun contentType(config: EncodingConfig): ContentType = contentTypeFromMediaType(config.contentType)

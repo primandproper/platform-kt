@@ -1,13 +1,11 @@
 package com.primandproper.platform.errors.http
 
-import com.primandproper.platform.errors.ErrCircuitBroken
-import com.primandproper.platform.errors.ErrEmptyInputParameter
-import com.primandproper.platform.errors.ErrEmptyInputProvided
-import com.primandproper.platform.errors.ErrInvalidIDProvided
-import com.primandproper.platform.errors.ErrNilInputParameter
-import com.primandproper.platform.errors.ErrNilInputProvided
-import com.primandproper.platform.errors.ErrNoRows
-import com.primandproper.platform.errors.ErrUserAlreadyExists
+import com.primandproper.platform.errors.CircuitBrokenException
+import com.primandproper.platform.errors.EmptyInputParameterException
+import com.primandproper.platform.errors.EmptyInputProvidedException
+import com.primandproper.platform.errors.InvalidIDProvidedException
+import com.primandproper.platform.errors.NoRowsException
+import com.primandproper.platform.errors.UserAlreadyExistsException
 import com.primandproper.platform.errors.isError
 import com.primandproper.platform.errors.newError
 import kotlin.test.Test
@@ -16,6 +14,10 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 
 class ErrorMapperTest {
+    // A fresh registry per test method (JUnit instantiates the class per method), so a custom mapper
+    // registered in one test never leaks into another — the isolation the process-global list lacked.
+    private val registry = HttpErrorMapperRegistry()
+
     // --- PlatformHttpMapper (mirrors TestPlatformMapper_Map) ---
 
     @Test
@@ -25,7 +27,7 @@ class ErrorMapperTest {
 
     @Test
     fun errNoRowsMapsToDataNotFound() {
-        val m = PlatformHttpMapper.map(ErrNoRows)
+        val m = PlatformHttpMapper.map(NoRowsException())
         assertNotNull(m)
         assertEquals(ErrorCode.ErrDataNotFound, m.code)
         assertEquals("data not found", m.message)
@@ -33,7 +35,7 @@ class ErrorMapperTest {
 
     @Test
     fun errUserAlreadyExistsMapsToValidatingRequestInput() {
-        val m = PlatformHttpMapper.map(ErrUserAlreadyExists)
+        val m = PlatformHttpMapper.map(UserAlreadyExistsException())
         assertNotNull(m)
         assertEquals(ErrorCode.ErrValidatingRequestInput, m.code)
         assertEquals("user already exists", m.message)
@@ -41,7 +43,7 @@ class ErrorMapperTest {
 
     @Test
     fun errCircuitBrokenMapsToCircuitBroken() {
-        val m = PlatformHttpMapper.map(ErrCircuitBroken)
+        val m = PlatformHttpMapper.map(CircuitBrokenException())
         assertNotNull(m)
         assertEquals(ErrorCode.ErrCircuitBroken, m.code)
         assertEquals("service temporarily unavailable", m.message)
@@ -50,11 +52,9 @@ class ErrorMapperTest {
     @Test
     fun platformInputSentinelsMapToValidatingRequestInput() {
         for (err in listOf(
-            ErrNilInputParameter,
-            ErrEmptyInputParameter,
-            ErrNilInputProvided,
-            ErrInvalidIDProvided,
-            ErrEmptyInputProvided,
+            EmptyInputParameterException(),
+            InvalidIDProvidedException(),
+            EmptyInputProvidedException(),
         )) {
             val m = PlatformHttpMapper.map(err)
             assertNotNull(m)
@@ -71,42 +71,42 @@ class ErrorMapperTest {
 
     @Test
     fun toApiErrorNil() {
-        val m = toApiError(null)
+        val m = registry.toApiError(null)
         assertEquals(ErrorCode.ErrNothingSpecific, m.code)
         assertEquals("", m.message)
     }
 
     @Test
     fun toApiErrorKnownPlatformError() {
-        val m = toApiError(ErrNoRows)
+        val m = registry.toApiError(NoRowsException())
         assertEquals(ErrorCode.ErrDataNotFound, m.code)
         assertEquals("data not found", m.message)
     }
 
     @Test
     fun toApiErrorUnknownReturnsFallback() {
-        val m = toApiError(newError("totally unknown error that no mapper handles"))
+        val m = registry.toApiError(newError("totally unknown error that no mapper handles"))
         assertEquals(ErrorCode.ErrNothingSpecific, m.code)
         assertEquals("an error occurred", m.message)
     }
 
     @Test
     fun toApiErrorCircuitBroken() {
-        val m = toApiError(ErrCircuitBroken)
+        val m = registry.toApiError(CircuitBrokenException())
         assertEquals(ErrorCode.ErrCircuitBroken, m.code)
         assertEquals("service temporarily unavailable", m.message)
     }
 
     @Test
-    fun toApiErrorNilInputParameter() {
-        val m = toApiError(ErrNilInputParameter)
+    fun toApiErrorEmptyInputParameter() {
+        val m = registry.toApiError(EmptyInputParameterException())
         assertEquals(ErrorCode.ErrValidatingRequestInput, m.code)
         assertEquals("invalid input", m.message)
     }
 
     @Test
     fun toApiErrorUserAlreadyExists() {
-        val m = toApiError(ErrUserAlreadyExists)
+        val m = registry.toApiError(UserAlreadyExistsException())
         assertEquals(ErrorCode.ErrValidatingRequestInput, m.code)
         assertEquals("user already exists", m.message)
     }
@@ -116,11 +116,11 @@ class ErrorMapperTest {
     @Test
     fun registersMapperConsultedByToApiError() {
         val customErr = newError("http-register-test-error")
-        registerHttpErrorMapper { err ->
+        registry.register { err ->
             if (isError(err, customErr)) HttpMapping(ErrorCode("E_CUSTOM"), "custom message") else null
         }
 
-        val m = toApiError(customErr)
+        val m = registry.toApiError(customErr)
         assertEquals(ErrorCode("E_CUSTOM"), m.code)
         assertEquals("custom message", m.message)
     }

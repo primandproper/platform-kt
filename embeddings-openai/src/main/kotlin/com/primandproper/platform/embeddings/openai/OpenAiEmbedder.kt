@@ -1,7 +1,7 @@
 package com.primandproper.platform.embeddings.openai
 
 import com.primandproper.platform.circuitbreaking.CircuitBreaker
-import com.primandproper.platform.circuitbreaking.ensureCircuitBreaker
+import com.primandproper.platform.circuitbreaking.NoopCircuitBreaker
 import com.primandproper.platform.embeddings.Embedder
 import com.primandproper.platform.embeddings.Embedding
 import com.primandproper.platform.embeddings.EmbeddingInput
@@ -11,6 +11,8 @@ import com.primandproper.platform.httpclient.HttpMethod
 import com.primandproper.platform.httpclient.HttpRequest
 import com.primandproper.platform.observability.Keys
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.Observer
 import com.primandproper.platform.observability.TracerProvider
 import com.primandproper.platform.observability.span
@@ -137,7 +139,7 @@ public class OpenAiEmbedder internal constructor(
             set(EmbeddingKeys.DIMENSIONS, vector.size)
 
             Embedding(
-                vector = vector,
+                vector = vector.toFloatArray(),
                 sourceText = input.content,
                 model = model,
                 provider = NAME,
@@ -166,15 +168,15 @@ public fun OpenAiEmbedder(
     httpClient: HttpClient,
     baseUrl: String = OpenAiConfig.DEFAULT_BASE_URL,
     defaultModel: String = "",
-    logger: Logger? = null,
-    tracerProvider: TracerProvider? = null,
-    circuitBreaker: CircuitBreaker? = null,
+    logger: Logger = NoopLogger,
+    tracerProvider: TracerProvider = NoopTracerProvider,
+    circuitBreaker: CircuitBreaker = NoopCircuitBreaker,
 ): OpenAiEmbedder {
     if (apiKey.isEmpty()) throw EmptyApiKeyException()
     return OpenAiEmbedder(
         o11y = Observer(NAME, logger, tracerProvider),
         httpClient = httpClient,
-        circuitBreaker = ensureCircuitBreaker(circuitBreaker),
+        circuitBreaker = circuitBreaker,
         apiKey = apiKey,
         defaultModel = defaultModel,
         embeddingsUrl = baseUrl.trimEnd('/') + "/v1/embeddings",
@@ -185,9 +187,9 @@ public fun OpenAiEmbedder(
 public fun OpenAiEmbedder(
     config: OpenAiConfig,
     httpClient: HttpClient,
-    logger: Logger? = null,
-    tracerProvider: TracerProvider? = null,
-    circuitBreaker: CircuitBreaker? = null,
+    logger: Logger = NoopLogger,
+    tracerProvider: TracerProvider = NoopTracerProvider,
+    circuitBreaker: CircuitBreaker = NoopCircuitBreaker,
 ): OpenAiEmbedder {
     config.validate()
     return OpenAiEmbedder(

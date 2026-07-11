@@ -1,8 +1,10 @@
 package com.primandproper.platform.encoding
 
-import com.primandproper.platform.errors.wrapf
+import com.primandproper.platform.errors.wrap
 import com.primandproper.platform.observability.Keys
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.Observer
 import com.primandproper.platform.observability.TracerProvider
 import com.primandproper.platform.observability.spanBlocking
@@ -157,7 +159,7 @@ internal class DefaultServerEncoderDecoder(
             try {
                 encodeToBytes(contentType, serializer, value)
             } catch (e: Exception) {
-                throw wrapf(e, "encoding %s content", contentType.mediaType) ?: e
+                throw wrap(e, "encoding ${contentType.mediaType} content")
             }
         }
 
@@ -169,7 +171,7 @@ internal class DefaultServerEncoderDecoder(
             try {
                 encodeToBytes(ContentType.JSON, serializer, value)
             } catch (e: Exception) {
-                throw wrapf(e, "encoding JSON content") ?: e
+                throw wrap(e, "encoding JSON content")
             }
         }
 
@@ -186,16 +188,9 @@ internal class DefaultServerEncoderDecoder(
  */
 public fun ServerEncoderDecoder(
     contentType: ContentType,
-    logger: Logger? = null,
-    tracerProvider: TracerProvider? = null,
+    logger: Logger = NoopLogger,
+    tracerProvider: TracerProvider = NoopTracerProvider,
 ): ServerEncoderDecoder = DefaultServerEncoderDecoder(contentType, Observer("server_encoder_decoder", logger, tracerProvider))
-
-/** Go-named alias for [ServerEncoderDecoder]. Port of `ProvideServerEncoderDecoder`. */
-public fun provideServerEncoderDecoder(
-    logger: Logger?,
-    tracerProvider: TracerProvider?,
-    contentType: ContentType,
-): ServerEncoderDecoder = ServerEncoderDecoder(contentType, logger, tracerProvider)
 
 /**
  * Encodes [value] to [response] with HTTP 200. Port of Go's concrete `RespondWithData`, kept as an

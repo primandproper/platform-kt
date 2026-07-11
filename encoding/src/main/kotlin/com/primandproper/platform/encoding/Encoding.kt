@@ -12,7 +12,11 @@ import java.io.InputStream
  * and delegates, so a caller with a value and a format needs no wiring.
  *
  * A `null` content type defaults to [ContentType.JSON], exactly as Go's `if ct == nil { ct = ...JSON }`.
- * The `Must*` variants throw on failure where Go panics — the JVM idiom for "this must not fail".
+ *
+ * Go's `Must*` decode variants collapse into plain [decode] / [decodeJson] here: everything throws on
+ * failure already in Kotlin, so the panic-vs-return distinction they encode does not exist. The
+ * encoders keep no such distinction to shed either — they are simply named [encode] / [encodeJson] /
+ * [jsonIntoReader].
  */
 
 /** Decodes [data] into a `T`, defaulting to JSON when [contentType] is `null`. Port of `Decode`. */
@@ -23,7 +27,7 @@ public fun <T> decode(
 ): T = ServerEncoderDecoder(contentType ?: ContentType.JSON).decodeBytes(data, serializer)
 
 /** Encodes [value] to bytes, defaulting to JSON when [contentType] is `null`. Port of `MustEncode`. */
-public fun <T> mustEncode(
+public fun <T> encode(
     value: T,
     contentType: ContentType?,
     serializer: KSerializer<T>,
@@ -33,18 +37,11 @@ public fun <T> mustEncode(
     return out.toByteArray()
 }
 
-/** [decode] that throws on failure instead of returning it. Port of `MustDecode`. */
-public fun <T> mustDecode(
-    data: ByteArray,
-    contentType: ContentType?,
-    serializer: KSerializer<T>,
-): T = decode(data, contentType, serializer)
-
 /** JSON-encodes [value]. Port of `MustEncodeJSON`. */
-public fun <T> mustEncodeJson(
+public fun <T> encodeJson(
     value: T,
     serializer: KSerializer<T>,
-): ByteArray = mustEncode(value, ContentType.JSON, serializer)
+): ByteArray = encode(value, ContentType.JSON, serializer)
 
 /** JSON-decodes [data] into a `T`. Port of `DecodeJSON`. */
 public fun <T> decodeJson(
@@ -52,17 +49,11 @@ public fun <T> decodeJson(
     serializer: KSerializer<T>,
 ): T = decode(data, ContentType.JSON, serializer)
 
-/** JSON-decodes [data], throwing on failure. Port of `MustDecodeJSON`. */
-public fun <T> mustDecodeJson(
-    data: ByteArray,
-    serializer: KSerializer<T>,
-): T = mustDecode(data, ContentType.JSON, serializer)
-
 /** JSON-encodes [value] and returns a reader over the bytes. Port of `MustJSONIntoReader`. */
-public fun <T> mustJsonIntoReader(
+public fun <T> jsonIntoReader(
     value: T,
     serializer: KSerializer<T>,
-): InputStream = mustEncode(value, ContentType.JSON, serializer).inputStream()
+): InputStream = encode(value, ContentType.JSON, serializer).inputStream()
 
 // Reified conveniences for `@Serializable` types, so a caller can write `decode<Foo>(bytes, null)`.
 
@@ -72,26 +63,17 @@ public inline fun <reified T> decode(
     contentType: ContentType? = null,
 ): T = decode(data, contentType, serializer())
 
-/** [mustEncode] deriving the serializer for a `@Serializable` [T]. */
-public inline fun <reified T> mustEncode(
+/** [encode] deriving the serializer for a `@Serializable` [T]. */
+public inline fun <reified T> encode(
     value: T,
     contentType: ContentType? = null,
-): ByteArray = mustEncode(value, contentType, serializer())
+): ByteArray = encode(value, contentType, serializer())
 
-/** [mustDecode] deriving the serializer for a `@Serializable` [T]. */
-public inline fun <reified T> mustDecode(
-    data: ByteArray,
-    contentType: ContentType? = null,
-): T = mustDecode(data, contentType, serializer())
-
-/** [mustEncodeJson] deriving the serializer for a `@Serializable` [T]. */
-public inline fun <reified T> mustEncodeJson(value: T): ByteArray = mustEncodeJson(value, serializer())
+/** [encodeJson] deriving the serializer for a `@Serializable` [T]. */
+public inline fun <reified T> encodeJson(value: T): ByteArray = encodeJson(value, serializer())
 
 /** [decodeJson] deriving the serializer for a `@Serializable` [T]. */
 public inline fun <reified T> decodeJson(data: ByteArray): T = decodeJson(data, serializer())
 
-/** [mustDecodeJson] deriving the serializer for a `@Serializable` [T]. */
-public inline fun <reified T> mustDecodeJson(data: ByteArray): T = mustDecodeJson(data, serializer())
-
-/** [mustJsonIntoReader] deriving the serializer for a `@Serializable` [T]. */
-public inline fun <reified T> mustJsonIntoReader(value: T): InputStream = mustJsonIntoReader(value, serializer())
+/** [jsonIntoReader] deriving the serializer for a `@Serializable` [T]. */
+public inline fun <reified T> jsonIntoReader(value: T): InputStream = jsonIntoReader(value, serializer())

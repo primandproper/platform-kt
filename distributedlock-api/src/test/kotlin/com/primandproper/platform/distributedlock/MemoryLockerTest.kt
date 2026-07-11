@@ -14,20 +14,14 @@ import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TestTimeSource
 
-/** Port of platform-go's `distributedlock/memory/memory_test.go`, with an injected clock. */
+/** Port of platform-go's `distributedlock/memory/memory_test.go`, with an injected time source. */
 class MemoryLockerTest {
-    // A mutable fake clock so lease-expiry paths are exercised without real sleeps.
-    private class FakeClock(var millis: Long = 0L) {
-        fun advance(by: Long) {
-            millis += by
-        }
-    }
-
     private fun locker(
-        clock: FakeClock = FakeClock(),
+        timeSource: TestTimeSource = TestTimeSource(),
         observer: RecordingObserver? = null,
-    ): MemoryLocker = MemoryLocker(observer ?: noopObserver("test")) { clock.millis }
+    ): MemoryLocker = MemoryLocker(observer ?: noopObserver("test"), timeSource)
 
     @Test
     fun `standard construction yields a usable locker`() =
@@ -59,16 +53,16 @@ class MemoryLockerTest {
             val l = locker()
             l.acquire("shared", 1.minutes)
             val e = assertFailsWith<PlatformException> { l.acquire("shared", 1.minutes) }
-            assertTrue(isError(e, ErrLockNotAcquired))
+            assertTrue(isError<LockNotAcquiredException>(e))
         }
 
     @Test
     fun `re-acquire after expiry succeeds`() =
         runTest {
-            val clock = FakeClock()
+            val clock = TestTimeSource()
             val l = locker(clock)
             l.acquire("exp", 50.milliseconds)
-            clock.advance(80L)
+            clock += 80.milliseconds
             // Previously held, now expired: acquiring again must succeed.
             val lock = l.acquire("exp", 1.seconds)
             assertEquals("exp", lock.key)
@@ -81,7 +75,7 @@ class MemoryLockerTest {
             val l = locker(observer = obs)
 
             val e = assertFailsWith<PlatformException> { l.acquire("", 1.seconds) }
-            assertTrue(isError(e, ErrEmptyKey))
+            assertTrue(isError<EmptyKeyException>(e))
 
             obs.assertObservedOperationWithValues("lock.key" to "", "lock.ttl" to 1.seconds)
         }
@@ -90,24 +84,24 @@ class MemoryLockerTest {
     fun `Acquire rejects zero TTL`() =
         runTest {
             val e = assertFailsWith<PlatformException> { locker().acquire("k", 0.seconds) }
-            assertTrue(isError(e, ErrInvalidTTL))
+            assertTrue(isError<InvalidTtlException>(e))
         }
 
     @Test
     fun `Acquire rejects negative TTL`() =
         runTest {
             val e = assertFailsWith<PlatformException> { locker().acquire("k", -(1.seconds)) }
-            assertTrue(isError(e, ErrInvalidTTL))
+            assertTrue(isError<InvalidTtlException>(e))
         }
 
     @Test
     fun `Acquire sweeps expired entries for other keys`() =
         runTest {
-            val clock = FakeClock()
+            val clock = TestTimeSource()
             val l = locker(clock)
 
             l.acquire("keyA", 1.milliseconds)
-            clock.advance(10L)
+            clock += 10.milliseconds
 
             // Acquiring an unrelated key must sweep keyA's now-expired entry.
             l.acquire("keyB", 1.minutes)
@@ -140,44 +134,44 @@ class MemoryLockerTest {
             val lock = l.acquire("k", 1.minutes)
             lock.release()
             val e = assertFailsWith<PlatformException> { lock.release() }
-            assertTrue(isError(e, ErrLockNotHeld))
+            assertTrue(isError<LockNotHeldException>(e))
         }
 
     @Test
     fun `release after expiration returns ErrLockNotHeld`() =
         runTest {
-            val clock = FakeClock()
+            val clock = TestTimeSource()
             val l = locker(clock)
             val lock = l.acquire("k", 50.milliseconds)
-            clock.advance(80L)
+            clock += 80.milliseconds
             val e = assertFailsWith<PlatformException> { lock.release() }
-            assertTrue(isError(e, ErrLockNotHeld))
+            assertTrue(isError<LockNotHeldException>(e))
         }
 
     @Test
     fun `Refresh extends TTL past the original expiry`() =
         runTest {
-            val clock = FakeClock()
+            val clock = TestTimeSource()
             val l = locker(clock)
             val lock = l.acquire("k", 50.milliseconds)
             lock.refresh(5.seconds)
             assertEquals(5.seconds, lock.ttl)
 
             // Even after the original TTL elapses, the lock is still held.
-            clock.advance(80L)
+            clock += 80.milliseconds
             val e = assertFailsWith<PlatformException> { l.acquire("k", 1.seconds) }
-            assertTrue(isError(e, ErrLockNotAcquired))
+            assertTrue(isError<LockNotAcquiredException>(e))
         }
 
     @Test
     fun `Refresh after expiration returns ErrLockNotHeld`() =
         runTest {
-            val clock = FakeClock()
+            val clock = TestTimeSource()
             val l = locker(clock)
             val lock = l.acquire("k", 50.milliseconds)
-            clock.advance(80L)
+            clock += 80.milliseconds
             val e = assertFailsWith<PlatformException> { lock.refresh(1.seconds) }
-            assertTrue(isError(e, ErrLockNotHeld))
+            assertTrue(isError<LockNotHeldException>(e))
         }
 
     @Test
@@ -186,7 +180,7 @@ class MemoryLockerTest {
             val l = locker()
             val lock = l.acquire("k", 1.minutes)
             val e = assertFailsWith<PlatformException> { lock.refresh(0.seconds) }
-            assertTrue(isError(e, ErrInvalidTTL))
+            assertTrue(isError<InvalidTtlException>(e))
         }
 
     @Test
@@ -204,7 +198,7 @@ class MemoryLockerTest {
 
             // The previous handle now sees the lock as not-held.
             val e = assertFailsWith<PlatformException> { lock.release() }
-            assertTrue(isError(e, ErrLockNotHeld))
+            assertTrue(isError<LockNotHeldException>(e))
             // And the key is acquirable again.
             l.acquire("k", 1.seconds)
         }

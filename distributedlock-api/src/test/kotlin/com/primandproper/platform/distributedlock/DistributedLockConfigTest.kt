@@ -2,6 +2,7 @@ package com.primandproper.platform.distributedlock
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 /** Port of the provider-selection portion of platform-go's `distributedlock/config/config_test.go`. */
 class DistributedLockConfigTest {
@@ -20,9 +21,14 @@ class DistributedLockConfigTest {
     }
 
     @Test
-    fun `unknown and empty providers fall back to noop`() {
-        assertEquals(DistributedLockProvider.NOOP, DistributedLockProvider.fromValue("made-up"))
-        assertEquals(DistributedLockProvider.NOOP, DistributedLockProvider.fromValue(""))
-        assertEquals(DistributedLockProvider.NOOP, DistributedLockProvider.fromValue("   "))
+    fun `noop is an explicit opt-in, not a silent fallback`() {
+        assertEquals(DistributedLockProvider.NOOP, DistributedLockProvider.fromValue("noop"))
+    }
+
+    @Test
+    fun `unknown and empty providers throw rather than silently disabling locking`() {
+        assertFailsWith<IllegalArgumentException> { DistributedLockProvider.fromValue("made-up") }
+        assertFailsWith<IllegalArgumentException> { DistributedLockProvider.fromValue("") }
+        assertFailsWith<IllegalArgumentException> { DistributedLockProvider.fromValue("   ") }
     }
 }

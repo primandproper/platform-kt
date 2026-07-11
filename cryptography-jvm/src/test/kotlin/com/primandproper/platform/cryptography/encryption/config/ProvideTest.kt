@@ -10,28 +10,18 @@ class ProvideTest {
 
     @Test
     fun aesProvider() {
-        assertNotNull(provideEncryptorDecryptor(Config(provider = Provider.AES), key))
+        assertNotNull(EncryptorDecryptor(EncryptionConfig(provider = EncryptionProvider.AES), key))
     }
 
     @Test
     fun salsa20ProviderResolvesToSeam() {
         // salsa20 is a documented TODO seam: it resolves to a non-null instance (matching Go), but
         // encrypt/decrypt on it throw until implemented.
-        assertNotNull(provideEncryptorDecryptor(Config(provider = Provider.SALSA20), key))
-    }
-
-    @Test
-    fun emptyProviderErrors() {
-        assertFailsWith<IllegalArgumentException> { provideEncryptorDecryptor(Config(), key) }
-    }
-
-    @Test
-    fun unknownProviderErrors() {
-        assertFailsWith<IllegalArgumentException> { provideEncryptorDecryptor(Config(provider = "invalid"), key) }
+        assertNotNull(EncryptorDecryptor(EncryptionConfig(provider = EncryptionProvider.SALSA20), key))
     }
 
     @Test
     fun nilConfigErrors() {
-        assertFailsWith<IllegalArgumentException> { provideEncryptorDecryptor(null, key) }
+        assertFailsWith<IllegalArgumentException> { EncryptorDecryptor(null, key) }
     }
 }

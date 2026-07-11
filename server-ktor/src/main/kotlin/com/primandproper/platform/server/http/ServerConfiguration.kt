@@ -15,8 +15,9 @@ import io.ktor.server.application.Application
  * binds no port) configure the application identically.
  *
  * TODO(server-tracing): platform-go additionally wraps the whole handler in `otelhttp` at the server
- *  boundary. Per-request observability is already wired inside [KtorRouter]; a server-level span would
- *  go here via a Ktor OpenTelemetry server plugin.
+ *  boundary. Per-request observability — including extracting the caller's W3C `traceparent` so the
+ *  request span joins the incoming distributed trace — is already wired inside [KtorRouter.install]; a
+ *  server-level span (and outbound context injection) would go here via a Ktor OpenTelemetry server plugin.
  */
 public fun Application.configureHttpServer(router: Router) {
     val ktorRouter =

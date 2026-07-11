@@ -14,19 +14,17 @@ internal fun ByteArray.toHexLower(): String {
 }
 
 /**
- * Lowercase hex-encodes the big-endian bytes of the low [byteCount] bytes of [value], mirroring how
- * Go's `hash.Hash.Sum` writes a fixed-width checksum before hex-encoding (so the result is always
- * `byteCount * 2` characters, zero-padded).
+ * The low [byteCount] bytes of [value] as a big-endian [ByteArray], mirroring how Go's
+ * `hash.Hash.Sum` writes a fixed-width checksum (so the result is always [byteCount] bytes,
+ * zero-padded on the high end). Hex-encoding the result yields `byteCount * 2` characters.
  */
-internal fun uLongToHexLower(
+internal fun uLongToBytes(
     value: Long,
     byteCount: Int,
-): String {
-    val out = StringBuilder(byteCount * 2)
-    for (i in byteCount - 1 downTo 0) {
-        val b = (value ushr (i * 8)).toInt() and 0xFF
-        out.append(HEX_DIGITS[b ushr 4])
-        out.append(HEX_DIGITS[b and 0x0F])
+): ByteArray {
+    val out = ByteArray(byteCount)
+    for (i in 0 until byteCount) {
+        out[i] = (value ushr ((byteCount - 1 - i) * 8)).toByte()
     }
-    return out.toString()
+    return out
 }

@@ -2,6 +2,8 @@ package com.primandproper.platform.encoding
 
 import com.primandproper.platform.observability.Keys
 import com.primandproper.platform.observability.Logger
+import com.primandproper.platform.observability.NoopLogger
+import com.primandproper.platform.observability.NoopTracerProvider
 import com.primandproper.platform.observability.Observer
 import com.primandproper.platform.observability.TracerProvider
 import com.primandproper.platform.observability.spanBlocking
@@ -96,16 +98,9 @@ internal class DefaultClientEncoder(
  */
 public fun ClientEncoder(
     contentType: ContentType,
-    logger: Logger? = null,
-    tracerProvider: TracerProvider? = null,
+    logger: Logger = NoopLogger,
+    tracerProvider: TracerProvider = NoopTracerProvider,
 ): ClientEncoder = DefaultClientEncoder(contentType, Observer("client_encoder", logger, tracerProvider))
-
-/** Go-named alias for [ClientEncoder]. Port of `ProvideClientEncoder`. */
-public fun provideClientEncoder(
-    logger: Logger?,
-    tracerProvider: TracerProvider?,
-    contentType: ContentType,
-): ClientEncoder = ClientEncoder(contentType, logger, tracerProvider)
 
 // Reified conveniences, mirroring the server-side ones.
 

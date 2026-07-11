@@ -1,5 +1,7 @@
 package com.primandproper.platform.analytics
 
+import com.primandproper.platform.observability.SuspendCloseable
+
 /**
  * Collects data about customers — the port of platform-go's `analytics.EventReporter`.
  *
@@ -9,9 +11,12 @@ package com.primandproper.platform.analytics
  * error value. Delivery-oriented methods are therefore `suspend`, so a backend can await its
  * circuit breaker / transport without blocking a thread.
  */
-public interface EventReporter {
-    /** Flushes buffered events and releases the underlying client. Safe to call more than once. */
-    public fun close()
+public interface EventReporter : SuspendCloseable {
+    /**
+     * Flushes buffered events and releases the underlying client. Safe to call more than once.
+     * `suspend` via [SuspendCloseable] because the flush is delivery I/O.
+     */
+    override suspend fun close()
 
     /**
      * Upserts a user's identity, forwarding [properties] as user traits. Mirrors Go's `AddUser`

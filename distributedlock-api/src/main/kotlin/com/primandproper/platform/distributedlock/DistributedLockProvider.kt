@@ -24,14 +24,22 @@ public enum class DistributedLockProvider(
 
     public companion object {
         /**
-         * Resolves a provider from its string [value] (trimmed, case-insensitive), or [NOOP] if it
-         * names no known provider — mirroring Go's `ProvideLocker` falling back to the noop locker for
-         * an unknown or empty provider (`strings.TrimSpace(strings.ToLower(cfg.Provider))` then the
-         * `default:` branch).
+         * Resolves a provider from its string [value] (trimmed, case-insensitive), throwing
+         * [IllegalArgumentException] if it names no known provider.
+         *
+         * This deliberately does NOT fall back to [NOOP] on an unrecognized string: a silent fallback
+         * turns a config typo (`"redsi"`, `"postgress"`) into an always-grant no-op locker — distributed
+         * locking quietly disabled in production. Opting out of real locking must be explicit via the
+         * [NOOP] (`"noop"`) provider. Mirrors the loud-failure resolution used elsewhere in platform-kt
+         * (e.g. `PaymentManager` throwing on an unknown provider) rather than Go's
+         * lenient `default:` branch.
          */
         public fun fromValue(value: String): DistributedLockProvider {
             val normalized = value.trim().lowercase()
-            return entries.firstOrNull { it.value == normalized } ?: NOOP
+            return entries.firstOrNull { it.value == normalized }
+                ?: throw IllegalArgumentException(
+                    "unknown distributed-lock provider: \"$value\" (valid: ${entries.joinToString(", ") { it.value }})",
+                )
         }
     }
 }

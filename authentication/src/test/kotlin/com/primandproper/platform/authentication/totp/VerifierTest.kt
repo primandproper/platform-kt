@@ -33,7 +33,7 @@ class VerifierTest {
         runTest {
             val (verifier, _) = verifierAt(FIXED_NOW)
             val ex = assertFailsWith<Throwable> { verifier.verify(EXAMPLE_SECRET, "") }
-            assertTrue(isError(ex, ErrCodeRequired))
+            assertTrue(isError<CodeRequiredException>(ex))
         }
 
     @Test
@@ -41,7 +41,7 @@ class VerifierTest {
         runTest {
             val (verifier, _) = verifierAt(FIXED_NOW)
             val ex = assertFailsWith<Throwable> { verifier.verify(EXAMPLE_SECRET, "000000") }
-            assertTrue(isError(ex, ErrInvalidCode))
+            assertTrue(isError<InvalidCodeException>(ex))
         }
 
     @Test
@@ -51,7 +51,7 @@ class VerifierTest {
             // '1' is not an RFC 4648 base32 character; a bad stored secret is a normal auth failure
             // (→ ErrInvalidCode), not an IllegalArgumentException escaping the verifier.
             val ex = assertFailsWith<Throwable> { verifier.verify("ABC123!", "000000") }
-            assertTrue(isError(ex, ErrInvalidCode))
+            assertTrue(isError<InvalidCodeException>(ex))
         }
 
     @Test

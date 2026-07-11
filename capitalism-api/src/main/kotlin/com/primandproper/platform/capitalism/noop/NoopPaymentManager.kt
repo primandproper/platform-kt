@@ -12,7 +12,7 @@ import com.primandproper.platform.capitalism.SubscriptionCreationInput
  * safe default the config factory returns when payments are disabled, and a stand-in for tests that
  * don't care about real payment behavior.
  */
-public class NoopPaymentManager : PaymentManager {
+public object NoopPaymentManager : PaymentManager {
     override suspend fun handleEventWebhook(
         payload: ByteArray,
         signatureHeader: String,

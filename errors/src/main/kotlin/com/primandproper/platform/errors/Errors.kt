@@ -7,8 +7,8 @@ package com.primandproper.platform.errors
  * `errors.Is`/`errors.As`/`errors.Unwrap` for inspection. On the JVM the language already gives us
  * exceptions with a `cause` chain, so the port maps those Go idioms onto plain [Throwable]s:
  *
- * - `New`/`Newf`/`Errorf` → [newError] / [newErrorf].
- * - `Wrap`/`Wrapf`        → [wrap] / [wrapf] (both return `null` for a `null` cause, like Go).
+ * - `New`/`Newf`/`Errorf` → [newError] (build the message with a Kotlin string template).
+ * - `Wrap`/`Wrapf`        → [wrap] (takes a non-null cause; interpolate the message inline).
  * - `Join`               → [joinErrors].
  * - `errors.Is`          → [isError] (walks the cause chain, understands [joinErrors]).
  * - `errors.As`          → [asError] (finds the first cause of a given type).
@@ -21,35 +21,25 @@ public open class PlatformException(
     cause: Throwable? = null,
 ) : RuntimeException(message, cause)
 
-/** Creates a new error with [message]. Mirrors `errors.New`. */
+/**
+ * Creates a new error with [message]. Mirrors `errors.New` (and `errors.Newf`/`errors.Errorf` —
+ * build the formatted message with a Kotlin string template at the call site).
+ */
 public fun newError(message: String): PlatformException = PlatformException(message)
 
 /**
- * Creates a new error whose message is [format] rendered with [args] via [String.format].
- * Mirrors `errors.Newf` / `errors.Errorf`.
- */
-public fun newErrorf(
-    format: String,
-    vararg args: Any?,
-): PlatformException = PlatformException(format.format(*args))
-
-/**
  * Wraps [cause] with a higher-level [message], preserving the cause chain so [isError]/[asError]
- * (and JVM stack traces) still see the original. Returns `null` when [cause] is `null`, matching
- * `errors.Wrap(nil, ...)` returning `nil`. The rendered message is `"<message>: <cause message>"`,
- * as cockroachdb/errors produces.
+ * (and JVM stack traces) still see the original. The rendered message is `"<message>: <cause
+ * message>"`, as cockroachdb/errors produces.
+ *
+ * Unlike Go's `errors.Wrap` (which returns `nil` for a `nil` cause), [cause] is non-null: Kotlin's
+ * type system already lets a caller decide whether to wrap, so this always returns a real exception
+ * and the caller is spared the `!!`/`?: fallback` dance the nullable Go shape forced.
  */
 public fun wrap(
-    cause: Throwable?,
+    cause: Throwable,
     message: String,
-): PlatformException? = cause?.let { PlatformException("$message: ${it.message}", it) }
-
-/** [wrap] with a formatted message. Mirrors `errors.Wrapf`. */
-public fun wrapf(
-    cause: Throwable?,
-    format: String,
-    vararg args: Any?,
-): PlatformException? = wrap(cause, format.format(*args))
+): PlatformException = PlatformException("$message: ${cause.message}", cause)
 
 /**
  * Combines several errors into one, mirroring `errors.Join`. `null` entries are dropped; the result
@@ -73,18 +63,40 @@ public class JoinedException internal constructor(
 /**
  * Reports whether [error], or anything in its cause chain, matches [target]. This is the [errors.Is]
  * analog: it compares by reference and by `equals`, and descends into [JoinedException] members.
- * Because the platform sentinels below are singletons, `isError(err, ErrNilInputParameter)` behaves
- * exactly like the Go `errors.Is(err, ErrNilInputParameter)` sentinel check.
+ *
+ * Prefer the type-aware [isError] overload (or a plain `is`/[asError] check) for the platform error
+ * *types* below: those are matched by class, not by identity, so an instance copied by coroutine
+ * stack-trace recovery (which breaks `===`) still matches. This instance-based overload remains for
+ * genuine value sentinels a caller may still hold.
  */
 public fun isError(
     error: Throwable?,
     target: Throwable?,
 ): Boolean {
     if (target == null) return error == null
+    return anyInChain(error) { it === target || it == target }
+}
+
+/**
+ * Reports whether [error], or anything in its cause chain (descending into [JoinedException]), is a
+ * [T]. The type-aware [errors.Is] analog: it matches by class, so it is robust to the exception being
+ * wrapped or copied (coroutine stack-trace recovery copies exceptions, breaking `===`). Use it in
+ * place of identity checks against the platform error classes, e.g. `isError<CircuitBrokenException>(e)`.
+ */
+public inline fun <reified T : Throwable> isError(error: Throwable?): Boolean = anyInChain(error) { it is T }
+
+/**
+ * Walks [error]'s cause chain (descending into [JoinedException] members) and reports whether any
+ * throwable satisfies [predicate]. The shared traversal behind both [isError] overloads.
+ */
+public fun anyInChain(
+    error: Throwable?,
+    predicate: (Throwable) -> Boolean,
+): Boolean {
     var current: Throwable? = error
     while (current != null) {
-        if (current === target || current == target) return true
-        if (current is JoinedException && current.errors.any { isError(it, target) }) return true
+        if (predicate(current)) return true
+        if (current is JoinedException && current.errors.any { anyInChain(it, predicate) }) return true
         current = current.cause
     }
     return false
@@ -103,20 +115,19 @@ public inline fun <reified T : Throwable> asError(error: Throwable?): T? {
     return null
 }
 
-// Common platform sentinels. In platform-go these are `var Err… = errors.New(…)` values matched via
-// errors.Is; here they are singleton exceptions matched via [isError] (identity through the chain).
+// Common platform error types. In platform-go these are `var Err… = errors.New(…)` sentinels matched
+// via errors.Is; here they are exception CLASSES thrown fresh at each site and matched by type (via a
+// plain `is`, [asError], or the type-aware [isError] overload) — never shared singleton instances.
+//
+// The nil-input sentinels (Go's `ErrNilInputParameter` / `ErrNilInputProvided`) are intentionally
+// dropped: Kotlin's non-null types already forbid what they modelled. Sites that need an argument
+// check use `require`/`requireNotNull` (an IllegalArgumentException) instead.
 
-/** Returned when an input parameter is `null`. */
-public val ErrNilInputParameter: PlatformException = PlatformException("provided input parameter is nil")
+/** Thrown when a required input parameter is empty. */
+public class EmptyInputParameterException : PlatformException("provided input parameter is empty")
 
-/** Returned when an input parameter is empty. */
-public val ErrEmptyInputParameter: PlatformException = PlatformException("provided input parameter is empty")
+/** Thrown when a required ID is passed in empty. */
+public class InvalidIDProvidedException : PlatformException("required ID provided is empty")
 
-/** Indicates `null` input was provided in an unacceptable context. */
-public val ErrNilInputProvided: PlatformException = PlatformException("nil input provided")
-
-/** Indicates a required ID was passed in empty. */
-public val ErrInvalidIDProvided: PlatformException = PlatformException("required ID provided is empty")
-
-/** Indicates a required input was passed in empty. */
-public val ErrEmptyInputProvided: PlatformException = PlatformException("input provided is empty")
+/** Thrown when a required input is passed in empty. */
+public class EmptyInputProvidedException : PlatformException("input provided is empty")

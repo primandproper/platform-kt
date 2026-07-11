@@ -1,24 +1,19 @@
 package com.primandproper.platform.capitalism.stripe
 
 import kotlin.test.Test
-import kotlin.test.assertFalse
-import kotlin.test.assertNotNull
-import kotlin.test.assertNull
-import kotlin.test.assertTrue
+import kotlin.test.assertFailsWith
 
 /** Mirrors platform-go's `capitalism/stripe.TestStripeConfig_ValidateWithContext`. */
 class StripeConfigTest {
     @Test
     fun `config with a webhook secret validates`() {
-        val cfg = StripeConfig(webhookSecret = "whsec_123")
-        assertNull(cfg.validate())
-        assertTrue(cfg.isValid)
+        StripeConfig(webhookSecret = "whsec_123").validate()
     }
 
     @Test
     fun `config without a webhook secret fails`() {
-        val cfg = StripeConfig(webhookSecret = "")
-        assertNotNull(cfg.validate())
-        assertFalse(cfg.isValid)
+        assertFailsWith<InvalidStripeConfigException> {
+            StripeConfig(webhookSecret = "").validate()
+        }
     }
 }
